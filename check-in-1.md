@@ -87,8 +87,12 @@ Metrics:
 - Numeric error metrics: MAE, MSE for tax and total_amount
 - OCR Alignment Sanity Metric: Since the dataset already includes OCR text, we can check if the annotated value appear in OCR text
 
-Train / Validation / Test Strategy
-- K-Fold Cross Validation
+Train / Validation / Test Strategy: split data using seller_name
+70% vendors → training
+15% vendors → validation
+15% vendors → test
+
+Alternative:  K-Fold Cross Validation
 
 ## Initial Baseline Representation
 
@@ -123,4 +127,4 @@ Example (Donut): Image → {invoice_number:..., total:...}
 
 - Implement vendor-aware train/test split.
 
--c Begin implementing LayoutLM input pipeline.
+- Begin implementing LayoutLM input pipeline.
