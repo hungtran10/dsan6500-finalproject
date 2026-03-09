@@ -56,7 +56,7 @@ Risk: insufficient labeled examples for fine-tuning. Mitigation: data augmentati
 
 Risk: OCR token ↔ annotation alignment errors. Mitigation: build alignment debugging visuals; use robust tokenization and normalize annotations to OCR granularity.
 
-## Data access & Documentation
+## Data Access & Documentation
 
 For this project I will be utilizing the collection of invoice images from this [Kaggle dataset](https://www.kaggle.com/datasets/osamahosamabdellatif/high-quality-invoice-images-for-ocr?resource=download).
 
@@ -67,6 +67,18 @@ Dataset License: [Database Contents License (DbCL) v1.0](https://opendatacommons
 Dataset size: 1GB (zipped), 2.41GB (unzipped) 
 
 Ways to Download the Dataset (instructions on the link above): kagglehub, Kaggle CLI, cURL, microissant, MCP, or manually downloading zip (easiest)
+
+## EDA
+
+Below are some high-level insights from my Exploratory Data Analysis. For more in-depth analysis, please visit eda.ipynb.
+
+- 1413 unique invoices
+- due_date column is missing values for all rows, meaning this field was not displayed in any of the invoices
+- There are almost as many vendors as invoices in the dataset: 1361 unique vendors.
+- The word token distrbution is relatively normal
+- Image size, and currency is very consistent across all image files 
+- The distribution of invoice total and tax are right skewed. 
+
 
 ## Evaluation Plan
 Metrics:
@@ -82,11 +94,7 @@ Train / Validation / Test Strategy
 
 ### Baseline 1 — Rule-Based Extraction (Classical) Pipeline:
 
-OCR text (already provided)
-      ↓
-regex / keyword rules
-      ↓
-field extraction
+OCR text (already provided) → regex / keyword rules → field extraction
 
 Example regex patterns for fields 
 - Invoice Number: Invoice\s*(No|Number|#)\s*[:\-]?\s*(\w+)
@@ -95,15 +103,7 @@ Example regex patterns for fields
 
 ### Baseline 2 — Hybrid Supervised Model Pipeline: 
 
-invoice image
-      ↓
-OCR tokens + bounding boxes
-      ↓
-LayoutLMv3
-      ↓
-token classification
-      ↓
-field extraction
+invoice image → OCR tokens + bounding boxes → LayoutLMv3 → token classification → field extraction
 
 Each token is represented as (text embedding + position embedding + image features)
 
@@ -111,13 +111,7 @@ Example token: Total → next token likely TOTAL_AMOUNT
 
 ### Baseline 3 - End-to-End Model Pipeline:
 
-invoice image
-      ↓
-Vision Transformer
-      ↓
-Transformer decoder
-      ↓
-generated JSON
+invoice image → Vision Transformer → Transformer decoder → generated JSON
 
 Example (Donut): Image → {invoice_number:..., total:...}
 
@@ -129,4 +123,4 @@ Example (Donut): Image → {invoice_number:..., total:...}
 
 - Implement vendor-aware train/test split.
 
-- Begin implementing LayoutLM input pipeline.
+-c Begin implementing LayoutLM input pipeline.
