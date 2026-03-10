@@ -105,26 +105,45 @@ Example regex patterns for fields
 - Date: \d{2}/\d{2}/\d{4}
 - Total Amount: Search near keyword "Total" and extract \$?\d+\.\d{2}
 
-### Baseline 2 — Hybrid Supervised Model Pipeline: 
+### Results:
 
-invoice image → OCR tokens + bounding boxes → LayoutLMv3 → token classification → field extraction
+Note: Field-level exact match accuracies and numeric error metrics compare baseline model output with the JSON ground truth data (not OCRed Text). 
+=== FIELD-LEVEL EXACT MATCH ACCURACIES (normalized) ===
+invoice_number: 100.00% (n=100)
+invoice_date: 100.00% (n=100)
+seller_name: 73.00% (n=100)
+client_name: 70.00% (n=100)
+total_amount: 2.00% (n=100)
+tax: 0.00% (n=100)
 
-Each token is represented as (text embedding + position embedding + image features)
+=== NUMERIC ERROR METRICS ===
+total_amount: MAE=5440.3463, MAPE=69.809%, N=100
+tax: MAE=471.5999, MAPE=146.8523%, N=100
 
-Example token: Total → next token likely TOTAL_AMOUNT
+=== OCR ALIGNMENT SANITY METRIC ===
+invoice_number: 100/100 (100.00%) of ground-truth values found verbatim in OCR text
+invoice_date: 0/100 (0.00%) of ground-truth values found verbatim in OCR text
+total_amount: 0/100 (0.00%) of ground-truth values found verbatim in OCR text
+seller_name: 58/100 (58.00%) of ground-truth values found verbatim in OCR text
+client_name: 71/100 (71.00%) of ground-truth values found verbatim in OCR text
+tax: 0/100 (0.00%) of ground-truth values found verbatim in OCR text
 
-### Baseline 3 - End-to-End Model Pipeline:
+=== SAMPLE MISMATCHES (invoice_number) ===
+No mismatches for invoice_number
 
-invoice image → Vision Transformer → Transformer decoder → generated JSON
-
-Example (Donut): Image → {invoice_number:..., total:...}
+(Please view the last section - Initial baseline model - for more insight into how I reached my results)
+### Discussion
+- I sampled 100 images for this part.
+- Field-level exact match accuracies are perfect for invoice_number and invoice_date but not as good for the 4 other fields. Numeric errors of MAE and MAPE are relatively high, possibly demonstrating the model's inability to correctly identify the numbers to the appropriate fields. 
+  - This suggests there needs to be some more tuning needed for the heuristics.
+- OCR Alignment Sanity metrics compare the baseline model with *OCRed Text* field that the dataset provides. The model is clearly underperforming the OCR baseline.
 
 ### Next steps:
 
-- Implement rule-based extraction baseline using OCR text.
+- Improve rule-based extraction baseline using Pytesseract, possibly consider other OCR models.
 
-- Compute baseline metrics.
+- Recompute compute baseline metrics.
 
-- Implement vendor-aware train/test split.
+- Implement vendor-aware train/test split and/or K-fold CV.
 
 - Begin implementing LayoutLM input pipeline.

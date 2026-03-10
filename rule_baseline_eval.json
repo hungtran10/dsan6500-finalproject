@@ -1,0 +1,72 @@
+{
+  "accuracy": {
+    "invoice_number": {
+      "accuracy": 1.0,
+      "count": 100
+    },
+    "invoice_date": {
+      "accuracy": 1.0,
+      "count": 100
+    },
+    "seller_name": {
+      "accuracy": 0.73,
+      "count": 100
+    },
+    "client_name": {
+      "accuracy": 0.7,
+      "count": 100
+    },
+    "total_amount": {
+      "accuracy": 0.02,
+      "count": 100
+    },
+    "tax": {
+      "accuracy": 0.0,
+      "count": 100
+    }
+  },
+  "numeric_metrics": {
+    "total_amount": {
+      "MAE": 5440.3463,
+      "MAPE": 69.809,
+      "N": 100
+    },
+    "tax": {
+      "MAE": 471.5999,
+      "MAPE": 146.8523,
+      "N": 100
+    }
+  },
+  "ocr_alignment": {
+    "invoice_number": {
+      "matched_in_ocr": 100,
+      "total_gt_exists": 100,
+      "percent": 100.0
+    },
+    "invoice_date": {
+      "matched_in_ocr": 0,
+      "total_gt_exists": 100,
+      "percent": 0.0
+    },
+    "total_amount": {
+      "matched_in_ocr": 0,
+      "total_gt_exists": 100,
+      "percent": 0.0
+    },
+    "seller_name": {
+      "matched_in_ocr": 58,
+      "total_gt_exists": 100,
+      "percent": 57.99999999999999
+    },
+    "client_name": {
+      "matched_in_ocr": 71,
+      "total_gt_exists": 100,
+      "percent": 71.0
+    },
+    "tax": {
+      "matched_in_ocr": 0,
+      "total_gt_exists": 100,
+      "percent": 0.0
+    }
+  }
+}
