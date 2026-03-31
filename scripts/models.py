@@ -1,13 +1,14 @@
-import cv2
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
 import pytesseract
+import cv2
 from PIL import Image
 import re
 import json
 from pathlib import Path
 from tqdm import tqdm
+
 import warnings
 
 warnings.filterwarnings('ignore')
@@ -19,11 +20,31 @@ class InvoiceTextDetector:
 
     def __init__(self, output_dir):
         self.output_dir = Path(output_dir)
-        self.output_dir.mkdir(exist_ok=True)
+        self.output_dir.mkdir(parents=True, exist_ok=True)
         self.tesseract_config = r'--oem 3 --psm 6 -c tessedit_char_whitelist=0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz.,:-$€£¥₹()[] '
 
     def detect_text_regions(self, image_path, visualize=False):
+        """
+        Detect likely text regions in an invoice image using contour-based heuristics.
+
+        Parameters
+        ----------
+        image_path : str or Path
+            Path to the invoice image.
+        visualize : bool, optional
+            If True, display the detected text regions on top of the image.
+
+        Returns
+        -------
+        image : numpy.ndarray or None
+            Grayscale image array if the image was loaded successfully; otherwise None.
+        text_regions : list[tuple] or None
+            List of bounding boxes in (x, y, w, h) format for detected text regions,
+            or None if the image could not be loaded.
+        """
         image = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE)
+
+        # If image doesn't exist
         if image is None:
             return None, None
 
@@ -35,6 +56,22 @@ class InvoiceTextDetector:
         return image, text_regions
 
     def _contour_based_detection(self, image):
+        """
+        Detect text-like regions in a grayscale image using morphological dilation
+        followed by contour extraction. This is a heuristic method designed to 
+        group nearby characters into text blocks before OCR is applied.
+
+        Parameters
+        ----------
+        image : numpy.ndarray
+            Grayscale invoice image.
+
+        Returns
+        -------
+        list[tuple]
+            Bounding boxes for detected text regions in (x, y, w, h) format.
+        """
+
         kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (20, 2))
         dilated = cv2.dilate(image, kernel, iterations=1)
         contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -48,6 +85,16 @@ class InvoiceTextDetector:
         return text_regions
 
     def _visualize_text_regions(self, image, text_regions):
+        """
+        Visualize detected text regions on a grayscale image.
+
+        Parameters
+        ----------
+        image : numpy.ndarray
+            Grayscale invoice image.
+        text_regions : list[tuple]
+            Bounding boxes in (x, y, w, h) format to draw on the image.
+        """
         image_copy = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
         for x, y, w, h in text_regions:
             cv2.rectangle(image_copy, (x, y), (x + w, y + h), (0, 255, 0), 2)
@@ -59,11 +106,38 @@ class InvoiceTextDetector:
         plt.show()
 
     def extract_text_from_image(self, image_path, confidence_threshold=30):
+        """
+        Extract word-level OCR output from an invoice image using Tesseract.
+        The OCR output is filtered to keep only non-empty words with confidence
+        above the given threshold.
+
+        Parameters
+        ----------
+        image_path : str or Path
+            Path to the invoice image.
+        confidence_threshold : int, optional
+            Minimum OCR confidence required to keep a detected word.
+
+        Returns
+        -------
+        list[dict] or None
+            A list of OCR word records. Each record contains:
+            - text
+            - confidence
+            - bbox
+            - block_num
+            - par_num
+            - line_num
+            - word_num
+
+            Returns None if the image cannot be loaded or OCR fails.
+        """
         try:
             image = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE)
             if image is None:
                 return None
 
+            # Apply OCR function to extract text into a dict
             ocr_data = pytesseract.image_to_data(image, config=self.tesseract_config, output_type=pytesseract.Output.DICT)
             extracted_text = []
 
@@ -71,6 +145,7 @@ class InvoiceTextDetector:
                 confidence = int(ocr_data['conf'][i])
                 text = ocr_data['text'][i].strip()
 
+                # if confidence > threshold and model text
                 if confidence > confidence_threshold and text:
                     extracted_text.append({
                         'text': text,
@@ -89,6 +164,33 @@ class InvoiceTextDetector:
             return None
 
     def extract_invoice_fields(self, extracted_text):
+        """
+        Extract structured invoice fields from OCR word output using regex rules.
+
+        Parameters
+        ----------
+        extracted_text : list[dict]
+            OCR output from extract_text_from_image, where each element contains
+            a text token and its bounding box/confidence metadata.
+
+        Returns
+        -------
+        dict
+            Dictionary of extracted invoice fields such as:
+            - invoice_number
+            - date
+            - total_amount
+            - vendor_name
+            - client_name
+            - vat_rate
+            - currency
+
+        Notes
+        -----
+        This method first reconstructs approximate text lines from OCR bounding boxes,
+        then searches both line-level text and full text using regular expressions.
+        """
+
         if not extracted_text:
             return {}
 
@@ -183,7 +285,27 @@ class InvoiceTextDetector:
     
     def process_single_image(self, image_path, visualize_regions=False):
         """
-        Complete text detection and extraction for a single image
+        Run the full OCR and field extraction pipeline on a single invoice image.
+
+        Parameters
+        ----------
+        image_path : str or Path
+            Path to the invoice image.
+        visualize_regions : bool, optional
+            If True, display detected text regions during processing.
+
+        Returns
+        -------
+        dict
+            A result dictionary containing:
+            - image_path
+            - filename
+            - success
+            - extracted_text
+            - invoice_fields
+            - text_regions
+            - total_words
+            - avg_confidence
         """
         result = {
             'image_path': str(image_path),
@@ -222,7 +344,29 @@ class InvoiceTextDetector:
     
     def process_dataset(self, processed_images_df, batch_size=10):
         """
-        Process entire dataset of preprocessed images
+        Process a dataset of preprocessed invoice images in batches.
+        Stores full per-image results in self.full_results for later analysis.
+
+        Parameters
+        ----------
+        processed_images_df : pandas.DataFrame
+            DataFrame containing preprocessed image paths and status information.
+            Must include at least:
+            - status
+            - processed_path
+        batch_size : int, optional
+            Number of images to process per batch.
+
+        Returns
+        -------
+        pandas.DataFrame
+            Summary DataFrame containing filename, image path, success flag,
+            word count, average OCR confidence, and whether invoice fields were found.
+
+        Saves:
+        - detailed_text_extraction.csv
+        - extracted_invoice_fields.csv
+        - text_detection_summary.csv
         """
         successful_images = processed_images_df[processed_images_df['status'] == 'success']
         print(f"Processing text detection for {len(successful_images)} images...")
@@ -265,6 +409,7 @@ class InvoiceTextDetector:
                 summary.update(result['invoice_fields'])
                 invoice_fields_summary.append(summary)
         
+        # Save invoice fields summary to CSV
         if invoice_fields_summary:
             fields_df = pd.DataFrame(invoice_fields_summary)
             fields_df.to_csv(self.output_dir / 'extracted_invoice_fields.csv', index=False)
@@ -293,7 +438,12 @@ class InvoiceTextDetector:
     
     def _print_summary(self, results):
         """
-        Print processing summary
+        Print a summary of OCR and invoice field extraction results.
+
+        Parameters
+        ----------
+        results : list[dict]
+            List of per-image result dictionaries produced by process_single_image function.
         """
         successful = [r for r in results if r['success']]
         failed = [r for r in results if not r['success']]
@@ -324,7 +474,14 @@ class InvoiceTextDetector:
     
     def visualize_text_extraction(self, image_path, result):
         """
-        Visualize text extraction results on image
+        Visualize OCR word boxes and extracted invoice fields for a single image.
+
+        Parameters
+        ----------
+        image_path : str or Path
+            Path to the invoice image.
+        result : dict
+            Result dictionary returned by process_single_image.
         """
         image = cv2.imread(str(image_path))
         if image is None:
@@ -363,21 +520,34 @@ class InvoiceTextDetector:
 
     def create_analysis_dashboard(self):
         """
-        Create comprehensive analysis dashboard of the extracted data
+        Create a comprehensive analysis dashboard for OCR and invoice extraction.
+        Requires process_dataset to have been run first so that self.full_results exists.
+
+        Returns
+        -------
+        dict or None
+            Summary statistics including:
+            - total_processed
+            - successful
+            - field_extraction_rates
+            - avg_confidence
+            - avg_words
+
+            Returns None if no results are available.
         """
         if not hasattr(self, 'full_results'):
             print("No results to analyze. Run process_dataset first.")
             return
         
         print(f"\n{'='*80}")
-        print("📊 COMPREHENSIVE INVOICE ANALYSIS DASHBOARD")
+        print("COMPREHENSIVE INVOICE ANALYSIS DASHBOARD")
         print(f"{'='*80}")
         
-        # 1. Overall Processing Statistics
+        # Overall Processing Statistics
         successful_results = [r for r in self.full_results if r['success']]
         failed_results = [r for r in self.full_results if not r['success']]
         
-        print(f"\n📈 PROCESSING OVERVIEW")
+        print(f"\nPROCESSING OVERVIEW")
         print(f"{'='*50}")
         print(f"Total images processed: {len(self.full_results):,}")
         print(f"Successful extractions: {len(successful_results):,} ({len(successful_results)/len(self.full_results)*100:.1f}%)")
@@ -387,8 +557,8 @@ class InvoiceTextDetector:
             print("No successful results to analyze.")
             return
         
-        # 2. OCR Quality Analysis
-        print(f"\n🎯 OCR QUALITY METRICS")
+        # OCR Quality Analysis
+        print(f"\nOCR QUALITY METRICS")
         print(f"{'='*50}")
         
         word_counts = [r['total_words'] for r in successful_results]
@@ -401,8 +571,8 @@ class InvoiceTextDetector:
         print(f"Median OCR confidence: {np.median(confidences):.1f}%")
         print(f"Confidence range: {min(confidences):.1f}% - {max(confidences):.1f}%")
         
-        # 3. Field Extraction Analysis
-        print(f"\n🔍 FIELD EXTRACTION ANALYSIS")
+        # Field Extraction Analysis
+        print(f"\nFIELD EXTRACTION ANALYSIS")
         print(f"{'='*50}")
         
         field_counts = {}
@@ -418,12 +588,14 @@ class InvoiceTextDetector:
         
         total_invoices = len(successful_results)
         print(f"Field extraction success rates:")
+
+        # Calculate success % per field
         for field, count in sorted(field_counts.items(), key=lambda x: x[1], reverse=True):
             percentage = count / total_invoices * 100
             print(f"  {field:15}: {count:3d} invoices ({percentage:5.1f}%)")
         
-        # 4. Data Quality Insights
-        print(f"\n📊 DATA QUALITY INSIGHTS")
+        # Data Quality Insights
+        print(f"\nDATA QUALITY INSIGHTS")
         print(f"{'='*50}")
         
         if 'total_amount' in all_fields:
@@ -461,19 +633,16 @@ class InvoiceTextDetector:
                 lengths = [len(n) for n in numeric_only]
                 print(f"  Numeric length range: {min(lengths)} - {max(lengths)} digits")
         
-        # 5. Create Visualizations
+        # Create visualizations
         self._create_analysis_plots(successful_results, all_fields)
         
-        # 6. Data Export Summary
-        print(f"\n💾 EXPORTED DATA FILES")
+        # Data Export Summary
+        print(f"\nEXPORTED DATA FILES")
         print(f"{'='*50}")
         csv_files = list(self.output_dir.glob('*.csv'))
         for csv_file in csv_files:
             file_size = csv_file.stat().st_size / 1024  # KB
             print(f"  {csv_file.name}: {file_size:.1f} KB")
-        
-        # 7. Recommendations
-        self._generate_recommendations(field_counts, total_invoices, confidences)
         
         return {
             'total_processed': len(self.full_results),
@@ -485,7 +654,14 @@ class InvoiceTextDetector:
     
     def _create_analysis_plots(self, successful_results, all_fields):
         """
-        Create visualization plots for the analysis
+        Create diagnostic plots for OCR quality and invoice field extraction.
+
+        Parameters
+        ----------
+        successful_results : list[dict]
+            List of successful per-image OCR/extraction results.
+        all_fields : dict
+            Dictionary mapping field names to lists of extracted field values.
         """
         fig, axes = plt.subplots(2, 2, figsize=(15, 10))
         fig.suptitle('Invoice Processing Analysis Dashboard', fontsize=16, fontweight='bold')
@@ -562,60 +738,16 @@ class InvoiceTextDetector:
         plt.tight_layout()
         plt.show()
     
-    def _generate_recommendations(self, field_counts, total_invoices, confidences):
-        """
-        Generate recommendations based on analysis
-        """
-        print(f"\n🚀 RECOMMENDATIONS FOR IMPROVEMENT")
-        print(f"{'='*50}")
-        
-        avg_confidence = np.mean(confidences)
-        
-        if avg_confidence > 90:
-            print("✅ OCR Quality: Excellent! Your preprocessing pipeline is working great.")
-        elif avg_confidence > 80:
-            print("⚠️  OCR Quality: Good, but could be improved with:")
-            print("   - Fine-tune adaptive threshold parameters")
-            print("   - Add more aggressive noise removal")
-        else:
-            print("❌ OCR Quality: Needs improvement:")
-            print("   - Review image quality and preprocessing steps")
-            print("   - Consider different OCR engines or parameters")
-        
-        # Field extraction recommendations
-        best_field = max(field_counts.items(), key=lambda x: x[1]) if field_counts else None
-        worst_field = min(field_counts.items(), key=lambda x: x[1]) if field_counts else None
-        
-        if best_field and worst_field:
-            best_rate = best_field[1] / total_invoices * 100
-            worst_rate = worst_field[1] / total_invoices * 100
-            
-            print(f"\n📊 Field Extraction:")
-            print(f"   Best performing: {best_field[0]} ({best_rate:.1f}%)")
-            print(f"   Needs improvement: {worst_field[0]} ({worst_rate:.1f}%)")
-            
-            if worst_rate < 50:
-                print(f"   🔧 Improve {worst_field[0]} extraction by:")
-                print(f"      - Review and enhance regex patterns")
-                print(f"      - Add more pattern variations")
-                print(f"      - Check text preprocessing quality")
-        
-        # Overall recommendations
-        total_extraction_rate = len([r for r in field_counts.values() if r > 0]) / len(field_counts) * 100 if field_counts else 0
-        
-        print(f"\n🎯 Next Steps:")
-        if total_extraction_rate > 70:
-            print("   1. Add table extraction for line items")
-            print("   2. Implement data validation rules")
-            print("   3. Create automated reports")
-        else:
-            print("   1. Focus on improving field extraction patterns")
-            print("   2. Add more training data for pattern recognition")
-            print("   3. Consider ML-based field extraction")
+    
 
     def visualize_sample_results(self, n_samples=3):
         """
-        Visualize sample text detection results
+        Visualize a small set of sample OCR and extraction results.
+
+        Parameters
+        ----------
+        n_samples : int, optional
+            Number of successful invoice examples to display.
         """
         if not hasattr(self, 'full_results'):
             print("No results to visualize. Run process_dataset first.")
@@ -674,241 +806,3 @@ if __name__ == "__main__":
     print("  - detailed_text_extraction.csv: Word-level extraction details")
     print("  - extracted_invoice_fields.csv: Structured invoice field data")
     print("\n🎉 Analysis complete! Check the dashboard above for insights.")
-
-    
-    def process_single_image(self, image_path, visualize_regions=False):
-        """
-        Complete text detection and extraction for a single image
-        """
-        result = {
-            'image_path': str(image_path),
-            'filename': Path(image_path).name,
-            'success': False,
-            'extracted_text': [],
-            'invoice_fields': {},
-            'text_regions': [],
-            'total_words': 0,
-            'avg_confidence': 0
-        }
-        
-        try:
-            # Detect text regions
-            image, text_regions = self.detect_text_regions(image_path, visualize_regions)
-            if image is None:
-                return result
-            
-            result['text_regions'] = text_regions
-            
-            # Extract text using OCR
-            extracted_text = self.extract_text_from_image(image_path)
-            if extracted_text:
-                result['extracted_text'] = extracted_text
-                result['total_words'] = len(extracted_text)
-                result['avg_confidence'] = np.mean([item['confidence'] for item in extracted_text])
-                
-                # Extract invoice fields
-                result['invoice_fields'] = self.extract_invoice_fields(extracted_text)
-                result['success'] = True
-            
-        except Exception as e:
-            print(f"Error processing {image_path}: {str(e)}")
-        
-        return result
-    
-    def process_dataset(self, processed_images_df, batch_size=10):
-        """
-        Process entire dataset of preprocessed images
-        """
-        successful_images = processed_images_df[processed_images_df['status'] == 'success']
-        print(f"Processing text detection for {len(successful_images)} images...")
-        
-        results = []
-        
-        for i in tqdm(range(0, len(successful_images), batch_size), desc="Processing OCR batches"):
-            batch_df = successful_images.iloc[i:i+batch_size]
-            
-            for _, row in batch_df.iterrows():
-                if row['processed_path'] and Path(row['processed_path']).exists():
-                    result = self.process_single_image(row['processed_path'])
-                    results.append(result)
-        
-        # Save detailed text extraction results
-        detailed_results = []
-        for result in results:
-            if result['success']:
-                for text_item in result['extracted_text']:
-                    detailed_results.append({
-                        'filename': result['filename'],
-                        'text': text_item['text'],
-                        'confidence': text_item['confidence'],
-                        'bbox_x': text_item['bbox'][0],
-                        'bbox_y': text_item['bbox'][1],
-                        'bbox_width': text_item['bbox'][2],
-                        'bbox_height': text_item['bbox'][3],
-                        'block_num': text_item['block_num'],
-                        'line_num': text_item['line_num']
-                    })
-        
-        detailed_df = pd.DataFrame(detailed_results)
-        detailed_df.to_csv(self.output_dir / 'detailed_text_extraction.csv', index=False)
-        
-        # Extract invoice fields summary
-        invoice_fields_summary = []
-        for result in results:
-            if result['success'] and result['invoice_fields']:
-                summary = {'filename': result['filename']}
-                summary.update(result['invoice_fields'])
-                invoice_fields_summary.append(summary)
-        
-        if invoice_fields_summary:
-            fields_df = pd.DataFrame(invoice_fields_summary)
-            fields_df.to_csv(self.output_dir / 'extracted_invoice_fields.csv', index=False)
-        
-        # Save simplified results for easier loading
-        simplified_results = []
-        for result in results:
-            simplified_results.append({
-                'filename': result['filename'],
-                'image_path': result['image_path'],
-                'success': result['success'],
-                'total_words': result['total_words'],
-                'avg_confidence': result['avg_confidence'],
-                'has_invoice_fields': len(result['invoice_fields']) > 0
-            })
-        
-        simplified_df = pd.DataFrame(simplified_results)
-        simplified_df.to_csv(self.output_dir / 'text_detection_summary.csv', index=False)
-        
-        self._print_summary(results)
-        
-        # Store full results for visualization
-        self.full_results = results
-        
-        return simplified_df
-    
-    def _print_summary(self, results):
-        """
-        Print processing summary
-        """
-        successful = [r for r in results if r['success']]
-        failed = [r for r in results if not r['success']]
-        
-        print(f"\n{'='*60}")
-        print("TEXT DETECTION SUMMARY")
-        print(f"{'='*60}")
-        print(f"Total images processed: {len(results)}")
-        print(f"Successful extractions: {len(successful)}")
-        print(f"Failed extractions: {len(failed)}")
-        
-        if successful:
-            avg_words = np.mean([r['total_words'] for r in successful])
-            avg_confidence = np.mean([r['avg_confidence'] for r in successful])
-            print(f"Average words per image: {avg_words:.1f}")
-            print(f"Average confidence: {avg_confidence:.1f}%")
-            
-            # Count extracted fields
-            field_counts = {}
-            for result in successful:
-                for field in result['invoice_fields'].keys():
-                    field_counts[field] = field_counts.get(field, 0) + 1
-            
-            if field_counts:
-                print(f"\nExtracted invoice fields:")
-                for field, count in field_counts.items():
-                    print(f"  {field}: {count} images ({count/len(successful)*100:.1f}%)")
-    
-    def visualize_text_extraction(self, image_path, result):
-        """
-        Visualize text extraction results on image
-        """
-        image = cv2.imread(str(image_path))
-        if image is None:
-            return
-        
-        image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        
-        # Draw bounding boxes around detected text
-        for text_item in result['extracted_text']:
-            x, y, w, h = text_item['bbox']
-            confidence = text_item['confidence']
-            
-            # Color based on confidence
-            if confidence > 80:
-                color = (0, 255, 0)  # Green for high confidence
-            elif confidence > 50:
-                color = (255, 255, 0)  # Yellow for medium confidence
-            else:
-                color = (255, 0, 0)  # Red for low confidence
-            
-            cv2.rectangle(image_rgb, (x, y), (x + w, y + h), color, 2)
-            cv2.putText(image_rgb, f"{text_item['text'][:10]}...", 
-                       (x, y - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
-        
-        plt.figure(figsize=(15, 10))
-        plt.imshow(image_rgb)
-        plt.title(f'Text Detection Results: {Path(image_path).name}')
-        plt.axis('off')
-        plt.show()
-        
-        # Print extracted fields
-        if result['invoice_fields']:
-            print("\nExtracted Invoice Fields:")
-            for field, value in result['invoice_fields'].items():
-                print(f"  {field}: {value}")
-
-    def visualize_sample_results(self, n_samples=3):
-        """
-        Visualize sample text detection results
-        """
-        if not hasattr(self, 'full_results'):
-            print("No results to visualize. Run process_dataset first.")
-            return
-        
-        successful_results = [r for r in self.full_results if r['success']][:n_samples]
-        
-        for i, result in enumerate(successful_results):
-            print(f"\n{'='*60}")
-            print(f"Sample {i+1}: {result['filename']}")
-            print(f"{'='*60}")
-            
-            # Show basic stats
-            print(f"Total words detected: {result['total_words']}")
-            print(f"Average confidence: {result['avg_confidence']:.1f}%")
-            
-            # Show extracted invoice fields
-            if result['invoice_fields']:
-                print("\nExtracted Invoice Fields:")
-                for field, value in result['invoice_fields'].items():
-                    print(f"  {field}: {value}")
-            
-            # Show sample text (first 10 words)
-            if result['extracted_text']:
-                print(f"\nSample extracted text (first 10 words):")
-                sample_text = ' '.join([item['text'] for item in result['extracted_text'][:10]])
-                print(f"  {sample_text}...")
-            
-            # Visualize on image
-            if Path(result['image_path']).exists():
-                self.visualize_text_extraction(result['image_path'], result)
-
-# Usage Example
-if __name__ == "__main__":
-    # Initialize text detector
-    text_detector = InvoiceTextDetector()
-    
-    # Load preprocessing results
-    preprocessing_results = pd.read_csv('/kaggle/working/all_processing_results.csv')
-    
-    # Process text detection
-    print("Starting text detection and OCR...")
-    ocr_summary = text_detector.process_dataset(preprocessing_results)
-    
-    # Visualize sample results (this now works properly)
-    print("\nVisualizing sample results...")
-    text_detector.visualize_sample_results(n_samples=3)
-    
-    print(f"\nText detection results saved to: {text_detector.output_dir}")
-    print("Files created:")
-    print("  - text_detection_summary.csv: Processing summary")
-    print("  - detailed_text_extraction.csv: Word-level extraction details")
-    print("  - extracted_invoice_fields.csv: Structured invoice field data")
