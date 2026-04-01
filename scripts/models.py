@@ -144,9 +144,17 @@ class InvoiceTextDetector:
     
     def extract_bottom_totals(self, bottom_words):
         """
-        Extract tax and total_amount from the bottom region.
-        tax corresponds to VAT value
-        total_amount corresponds to Gross worth
+        Extract tax, net_worth, and total_amount from the bottom region.
+
+        Preference order:
+        1) lines containing '$'
+        2) lines containing summary-like labels
+        3) arithmetic consistency: net_worth + tax ≈ total_amount
+
+        Rule:
+        - smallest numeric summary value -> tax
+        - middle value                  -> net_worth
+        - largest value                  -> total_amount
         """
         if not bottom_words:
             return {}
@@ -159,38 +167,102 @@ class InvoiceTextDetector:
 
         money_pattern = re.compile(r"(?<!\w)\d[\d\s.,]*[.,]\d{2}(?!\w)")
 
-        best_row_amounts = None
-
-        for txt, _ in line_texts:
-            low = txt.lower()
+        def line_amounts(txt):
             amounts = []
             for m in money_pattern.finditer(txt):
                 norm = self._normalize_money(m.group(0))
                 if norm is not None:
                     amounts.append(float(norm))
+            return amounts
 
-            if len(amounts) >= 3 and ("vat" in low or "gross" in low or "summary" in low):
-                best_row_amounts = amounts
-                break
+        def looks_like_summary(txt):
+            low = txt.lower()
+            return ("summary" in low) or ("vat" in low) or ("gross" in low)
 
-        if best_row_amounts is None:
-            for txt, _ in line_texts:
-                amounts = []
-                for m in money_pattern.finditer(txt):
-                    norm = self._normalize_money(m.group(0))
-                    if norm is not None:
-                        amounts.append(float(norm))
-                if len(amounts) >= 3:
-                    best_row_amounts = amounts
-                    break
+        def score_candidate(txt, amounts):
+            score = 0
+
+            # Prefer lines with $
+            if "$" in txt:
+                score += 5
+
+            # Prefer summary-like lines
+            if looks_like_summary(txt):
+                score += 3
+
+            # Prefer lines with at least 3 numeric values
+            score += min(len(amounts), 5)
+
+            # Extra bonus if the line has the exact expected shape
+            if len(amounts) >= 3:
+                svals = sorted(set(amounts))
+                if len(svals) >= 3:
+                    tax, net_worth, total = svals[0], svals[1], svals[-1]
+                    if abs((net_worth + tax) - total) <= max(0.05 * total, 0.10):
+                        score += 5
+
+            return score
+
+        candidates = []
+        for txt, _ in line_texts:
+            amounts = line_amounts(txt)
+            if len(amounts) >= 2:
+                candidates.append((score_candidate(txt, amounts), txt, amounts))
+
+        # Choose best candidate if possible
+        candidate_amounts = None
+        if candidates:
+            candidates.sort(key=lambda x: x[0], reverse=True)
+            best_score, best_txt, best_amounts = candidates[0]
+            if len(best_amounts) >= 2:
+                candidate_amounts = best_amounts
 
         result = {}
 
-        if best_row_amounts and len(best_row_amounts) >= 3:
-            result["tax"] = f"{best_row_amounts[1]:.2f}"
-            result["total_amount"] = f"{best_row_amounts[2]:.2f}"
-            return result
+        def assign_from_values(vals):
+            vals = sorted(set(vals))
+            if len(vals) >= 3:
+                tax = vals[0]
+                net_worth = vals[1]
+                total_amount = vals[-1]
+                return {
+                    "tax": f"{tax:.2f}",
+                    "net_worth": f"{net_worth:.2f}",
+                    "total_amount": f"{total_amount:.2f}",
+                }
+            if len(vals) == 2:
+                return {
+                    "tax": f"{min(vals):.2f}",
+                    "total_amount": f"{max(vals):.2f}",
+                }
+            return {}
 
+        # First pass: best candidate line
+        if candidate_amounts and len(candidate_amounts) >= 2:
+            result = assign_from_values(candidate_amounts)
+
+            # If we got 3 values, validate net_worth + tax ≈ total_amount
+            if "tax" in result and "net_worth" in result and "total_amount" in result:
+                tax = float(result["tax"])
+                net_worth = float(result["net_worth"])
+                total_amount = float(result["total_amount"])
+
+                if abs((tax + net_worth) - total_amount) <= max(0.05 * total_amount, 0.10):
+                    return result
+
+        # Second pass: any line with 3+ amounts
+        for txt, _ in line_texts:
+            amounts = line_amounts(txt)
+            if len(amounts) >= 3:
+                candidate = assign_from_values(amounts)
+                if candidate.get("tax") and candidate.get("net_worth") and candidate.get("total_amount"):
+                    tax = float(candidate["tax"])
+                    net_worth = float(candidate["net_worth"])
+                    total_amount = float(candidate["total_amount"])
+                    if abs((tax + net_worth) - total_amount) <= max(0.05 * total_amount, 0.10):
+                        return candidate
+
+        # Final fallback: use all bottom-region monetary tokens
         all_amounts = []
         for txt, _ in line_texts:
             for m in money_pattern.finditer(txt):
@@ -199,129 +271,16 @@ class InvoiceTextDetector:
                     all_amounts.append(float(norm))
 
         if all_amounts:
-            uniq = sorted(set(all_amounts))
-            result["tax"] = f"{uniq[0]:.2f}"
-            result["total_amount"] = f"{uniq[-1]:.2f}"
+            vals = sorted(set(all_amounts))
+            if len(vals) >= 3:
+                result["tax"] = f"{vals[0]:.2f}"
+                result["net_worth"] = f"{vals[1]:.2f}"
+                result["total_amount"] = f"{vals[-1]:.2f}"
+            elif len(vals) == 2:
+                result["tax"] = f"{vals[0]:.2f}"
+                result["total_amount"] = f"{vals[1]:.2f}"
 
         return result
-    
-    def extract_table_dataframe(self, table_words):
-        """
-        Convert the table region into a clean product-level DataFrame.
-        Expected columns:
-        No., Description, Qty, UM, Net price, Net worth, VAT[%], Gross Worth
-        """
-        if not table_words:
-            return pd.DataFrame()
-
-        lines = self._cluster_words_by_line(table_words)
-
-        line_data = []
-        for line in lines:
-            words = sorted(line["words"], key=lambda x: x["bbox"][0])
-            text = " ".join(w["text"] for w in words)
-            line_data.append({
-                "words": words,
-                "text": text
-            })
-
-        # Find header row
-        header_idx = None
-        for i, row in enumerate(line_data):
-            txt = row["text"].lower()
-            if (
-                "description" in txt and
-                "qty" in txt and
-                "um" in txt and
-                "net" in txt and
-                "gross" in txt
-            ):
-                header_idx = i
-                break
-
-        if header_idx is None:
-            return pd.DataFrame()
-
-        data_lines = line_data[header_idx + 1:]
-
-        product_rows = []
-        current_row = None
-
-        item_pattern = re.compile(r"^\d+\.$")
-
-        for row in data_lines:
-            words = row["words"]
-            text = row["text"].strip()
-
-            if not words:
-                continue
-
-            first_word = words[0]["text"].strip()
-
-            # New product row starts with "1.", "2.", etc.
-            if item_pattern.match(first_word):
-                if current_row:
-                    product_rows.append(current_row)
-
-                current_row = {
-                    "item_no": first_word.replace(".", ""),
-                    "words": words.copy()
-                }
-            else:
-                # Continuation of previous product description
-                if current_row:
-                    current_row["words"].extend(words)
-
-        if current_row:
-            product_rows.append(current_row)
-
-        structured_rows = []
-
-        for row in product_rows:
-            words = sorted(row["words"], key=lambda x: x["bbox"][0])
-            text = " ".join(w["text"] for w in words)
-
-            # Extract monetary values in order they appear
-            money_values = []
-            for m in re.finditer(r"\d[\d\s,]*[.,]\d{2}", text):
-                norm = self._normalize_money(m.group(0))
-                if norm is not None:
-                    money_values.append(float(norm))
-
-            # Expected order in a clean row:
-            # qty, net_price, net_worth, gross_worth
-            qty = None
-            net_price = None
-            net_worth = None
-            gross_worth = None
-
-            if len(money_values) >= 4:
-                qty = money_values[0]
-                net_price = money_values[1]
-                net_worth = money_values[2]
-                gross_worth = money_values[-1]
-
-            vat_match = re.search(r"(\d{1,2})\s*%", text)
-            vat_pct = vat_match.group(1) if vat_match else None
-
-            # Description: remove item number and numeric tokens
-            desc = re.sub(r"\d[\d\s,]*[.,]\d{2}", "", text)
-            desc = re.sub(r"\b\d+\.\b", "", desc)
-            desc = re.sub(r"\s+", " ", desc).strip()
-
-            structured_rows.append({
-                "item_no": row["item_no"],
-                "description": desc,
-                "qty": qty,
-                "um": None,  # can be filled later if you want to extract units explicitly
-                "net_price": net_price,
-                "net_worth": net_worth,
-                "vat_pct": vat_pct,
-                "gross_worth": gross_worth,
-                "raw_text": text
-            })
-
-        return pd.DataFrame(structured_rows)
     
     def _find_label_word(self, extracted_text, label_pattern):
         """
@@ -490,6 +449,146 @@ class InvoiceTextDetector:
         fields.update(bottom_fields)
 
         return fields
+    
+    def extract_table_dataframe(self, table_words):
+        """
+        Convert the table region into a line-item DataFrame.
+
+        Output columns:
+        - row_num
+        - item_no
+        - description
+        - qty
+        - um
+        - net_price
+        - net_worth
+        - vat_pct
+        - gross_worth
+        - raw_text
+        """
+        if not table_words:
+            return pd.DataFrame()
+
+        lines = self._cluster_words_by_line(table_words)
+        if not lines:
+            return pd.DataFrame()
+
+        # Find the header line
+        header_idx = None
+        for i, line in enumerate(lines):
+            text = " ".join(w["text"].lower() for w in line["words"])
+            if "description" in text and "qty" in text and "um" in text and "vat" in text and "gross" in text:
+                header_idx = i
+                break
+
+        if header_idx is None:
+            # Fallback: return raw line text if header detection fails
+            raw_rows = []
+            for i, line in enumerate(lines):
+                raw_rows.append({
+                    "row_num": i,
+                    "raw_text": " ".join(w["text"] for w in sorted(line["words"], key=lambda x: x["bbox"][0]))
+                })
+            return pd.DataFrame(raw_rows)
+
+        header_words = sorted(lines[header_idx]["words"], key=lambda x: x["bbox"][0])
+
+        def find_x_by_token(token_pattern, start_idx=0):
+            for w in header_words[start_idx:]:
+                if re.fullmatch(token_pattern, w["text"].strip(), re.IGNORECASE):
+                    return w["bbox"][0]
+            return None
+
+        # Header x positions
+        item_no_x = find_x_by_token(r"no\.?")
+        desc_x = find_x_by_token(r"description")
+        qty_x = find_x_by_token(r"qty")
+        um_x = find_x_by_token(r"um")
+
+        # After UM, headers often appear as Net price / Net worth / VAT / Gross worth
+        net_price_x = None
+        net_worth_x = None
+        vat_x = None
+        gross_x = None
+
+        after_um = False
+        net_seen = 0
+        for w in header_words:
+            txt = w["text"].strip().lower()
+            if um_x is not None and w["bbox"][0] >= um_x:
+                after_um = True
+
+            if after_um and txt == "net":
+                net_seen += 1
+                if net_seen == 1 and net_price_x is None:
+                    net_price_x = w["bbox"][0]
+                elif net_seen == 2 and net_worth_x is None:
+                    net_worth_x = w["bbox"][0]
+            elif after_um and txt == "vat" and vat_x is None:
+                vat_x = w["bbox"][0]
+            elif after_um and txt == "gross" and gross_x is None:
+                gross_x = w["bbox"][0]
+
+        # Fallback boundaries if any header token was not found
+        xs = [x for x in [item_no_x, desc_x, qty_x, um_x, net_price_x, net_worth_x, vat_x, gross_x] if x is not None]
+        if len(xs) < 4:
+            raw_rows = []
+            for i, line in enumerate(lines[header_idx + 1:], start=1):
+                raw_rows.append({
+                    "row_num": i,
+                    "raw_text": " ".join(w["text"] for w in sorted(line["words"], key=lambda x: x["bbox"][0]))
+                })
+            return pd.DataFrame(raw_rows)
+
+        # Use the detected header x positions to create bins
+        col_names = ["item_no", "description", "qty", "um", "net_price", "net_worth", "vat_pct", "gross_worth"]
+        col_starts = [item_no_x, desc_x, qty_x, um_x, net_price_x, net_worth_x, vat_x, gross_x]
+
+        # Keep only columns with valid starts
+        cols = [(name, x) for name, x in zip(col_names, col_starts) if x is not None]
+        cols = sorted(cols, key=lambda z: z[1])
+
+        if len(cols) < 4:
+            return pd.DataFrame()
+
+        boundaries = []
+        for i in range(len(cols) - 1):
+            boundaries.append((cols[i][1] + cols[i + 1][1]) / 2)
+
+        def assign_col(x_center):
+            for i, boundary in enumerate(boundaries):
+                if x_center < boundary:
+                    return cols[i][0]
+            return cols[-1][0]
+
+        data_rows = []
+        for row_idx, line in enumerate(lines[header_idx + 1:], start=1):
+            words = sorted(line["words"], key=lambda x: x["bbox"][0])
+            if not words:
+                continue
+
+            row_dict = {name: "" for name, _ in cols}
+            row_dict["row_num"] = row_idx
+
+            raw_text = " ".join(w["text"] for w in words)
+            row_dict["raw_text"] = raw_text
+
+            for w in words:
+                x, y, bw, bh = w["bbox"]
+                x_center = x + bw / 2
+                col = assign_col(x_center)
+                row_dict[col] = (row_dict[col] + " " + w["text"]).strip()
+
+            data_rows.append(row_dict)
+
+        df = pd.DataFrame(data_rows)
+
+        # Optional cleanup of numeric columns
+        for col in ["qty", "net_price", "net_worth", "vat_pct", "gross_worth"]:
+            if col in df.columns:
+                df[col] = df[col].str.replace(" ", "", regex=False)
+
+        return df
     
     def process_single_image(self, image_path):
         result = {
@@ -660,7 +759,7 @@ class InvoiceTextDetector:
             if s.lower() in ["", "nan", "none"]:
                 return np.nan
 
-            if field in ["total_amount", "tax"]:
+            if field in ["total_amount", "tax", "net_worth"]:
                 norm = self._normalize_money(s)
                 return norm if norm is not None else np.nan
 
@@ -671,7 +770,16 @@ class InvoiceTextDetector:
             s = re.sub(r"\s+", " ", s)
             return s.lower()
 
-        fields = ["invoice_number", "invoice_date", "seller_name", "client_name", "total_amount", "tax"]
+        fields = [
+            "invoice_number",
+            "invoice_date",
+            "seller_name",
+            "client_name",
+            "net_worth",
+            "total_amount",
+            "tax"
+        ]
+
         results = []
 
         for field in fields:
@@ -813,298 +921,36 @@ class InvoiceTextDetector:
             for field, value in result['invoice_fields'].items():
                 print(f"  {field}: {value}")
 
-    def create_analysis_dashboard(self):
-        """
-        Create a comprehensive analysis dashboard for OCR and invoice extraction.
-        Requires process_dataset to have been run first so that self.full_results exists.
-
-        Returns
-        -------
-        dict or None
-            Summary statistics including:
-            - total_processed
-            - successful
-            - field_extraction_rates
-            - avg_confidence
-            - avg_words
-
-            Returns None if no results are available.
-        """
-        if not hasattr(self, 'full_results'):
-            print("No results to analyze. Run process_dataset first.")
-            return
-        
-        print(f"\n{'='*80}")
-        print("COMPREHENSIVE INVOICE ANALYSIS DASHBOARD")
-        print(f"{'='*80}")
-        
-        # Overall Processing Statistics
-        successful_results = [r for r in self.full_results if r['success']]
-        failed_results = [r for r in self.full_results if not r['success']]
-        
-        print(f"\nPROCESSING OVERVIEW")
-        print(f"{'='*50}")
-        print(f"Total images processed: {len(self.full_results):,}")
-        print(f"Successful extractions: {len(successful_results):,} ({len(successful_results)/len(self.full_results)*100:.1f}%)")
-        print(f"Failed extractions: {len(failed_results):,} ({len(failed_results)/len(self.full_results)*100:.1f}%)")
-        
-        if not successful_results:
-            print("No successful results to analyze.")
-            return
-        
-        # OCR Quality Analysis
-        print(f"\nOCR QUALITY METRICS")
-        print(f"{'='*50}")
-        
-        word_counts = [r['total_words'] for r in successful_results]
-        confidences = [r['avg_confidence'] for r in successful_results]
-        
-        print(f"Average words per invoice: {np.mean(word_counts):.1f}")
-        print(f"Median words per invoice: {np.median(word_counts):.0f}")
-        print(f"Word count range: {min(word_counts)} - {max(word_counts)}")
-        print(f"Average OCR confidence: {np.mean(confidences):.1f}%")
-        print(f"Median OCR confidence: {np.median(confidences):.1f}%")
-        print(f"Confidence range: {min(confidences):.1f}% - {max(confidences):.1f}%")
-        
-        # Field Extraction Analysis
-        print(f"\nFIELD EXTRACTION ANALYSIS")
-        print(f"{'='*50}")
-        
-        field_counts = {}
-        all_fields = {}
-        
-        for result in successful_results:
-            for field, value in result['invoice_fields'].items():
-                if field not in field_counts:
-                    field_counts[field] = 0
-                    all_fields[field] = []
-                field_counts[field] += 1
-                all_fields[field].append(value)
-        
-        total_invoices = len(successful_results)
-        print(f"Field extraction success rates:")
-
-        # Calculate success % per field
-        for field, count in sorted(field_counts.items(), key=lambda x: x[1], reverse=True):
-            percentage = count / total_invoices * 100
-            print(f"  {field:15}: {count:3d} invoices ({percentage:5.1f}%)")
-        
-        # Data Quality Insights
-        print(f"\nDATA QUALITY INSIGHTS")
-        print(f"{'='*50}")
-        
-        if 'total_amount' in all_fields:
-            amounts = []
-            for amount_str in all_fields['total_amount']:
-                try:
-                    # Clean and convert to float
-                    clean_amount = re.sub(r'[,$]', '', amount_str)
-                    amount = float(clean_amount)
-                    amounts.append(amount)
-                except:
-                    pass
-            
-            if amounts:
-                print(f"Total amount statistics:")
-                print(f"  Count: {len(amounts)} valid amounts")
-                print(f"  Average: ${np.mean(amounts):.2f}")
-                print(f"  Median: ${np.median(amounts):.2f}")
-                print(f"  Range: ${min(amounts):.2f} - ${max(amounts):.2f}")
-                print(f"  Total value: ${sum(amounts):,.2f}")
-        
-        if 'invoice_number' in all_fields:
-            inv_numbers = all_fields['invoice_number']
-            print(f"\nInvoice number patterns:")
-            print(f"  Total extracted: {len(inv_numbers)}")
-            
-            # Analyze patterns
-            numeric_only = [n for n in inv_numbers if n.isdigit()]
-            alphanumeric = [n for n in inv_numbers if not n.isdigit()]
-            
-            print(f"  Numeric only: {len(numeric_only)} ({len(numeric_only)/len(inv_numbers)*100:.1f}%)")
-            print(f"  Alphanumeric: {len(alphanumeric)} ({len(alphanumeric)/len(inv_numbers)*100:.1f}%)")
-            
-            if numeric_only:
-                lengths = [len(n) for n in numeric_only]
-                print(f"  Numeric length range: {min(lengths)} - {max(lengths)} digits")
-        
-        # Create visualizations
-        self._create_analysis_plots(successful_results, all_fields)
-        
-        # Data Export Summary
-        print(f"\nEXPORTED DATA FILES")
-        print(f"{'='*50}")
-        csv_files = list(self.output_dir.glob('*.csv'))
-        for csv_file in csv_files:
-            file_size = csv_file.stat().st_size / 1024  # KB
-            print(f"  {csv_file.name}: {file_size:.1f} KB")
-        
-        return {
-            'total_processed': len(self.full_results),
-            'successful': len(successful_results),
-            'field_extraction_rates': {k: v/total_invoices for k, v in field_counts.items()},
-            'avg_confidence': np.mean(confidences),
-            'avg_words': np.mean(word_counts)
-        }
-    
-    def _create_analysis_plots(self, successful_results, all_fields):
-        """
-        Create diagnostic plots for OCR quality and invoice field extraction.
-
-        Parameters
-        ----------
-        successful_results : list[dict]
-            List of successful per-image OCR/extraction results.
-        all_fields : dict
-            Dictionary mapping field names to lists of extracted field values.
-        """
-        fig, axes = plt.subplots(2, 2, figsize=(15, 10))
-        fig.suptitle('Invoice Processing Analysis Dashboard', fontsize=16, fontweight='bold')
-        
-        # Plot 1: OCR Confidence Distribution
-        confidences = [r['avg_confidence'] for r in successful_results]
-        axes[0, 0].hist(confidences, bins=20, color='skyblue', alpha=0.7, edgecolor='black')
-        axes[0, 0].set_title('OCR Confidence Distribution')
-        axes[0, 0].set_xlabel('Confidence (%)')
-        axes[0, 0].set_ylabel('Frequency')
-        axes[0, 0].axvline(np.mean(confidences), color='red', linestyle='--', 
-                          label=f'Mean: {np.mean(confidences):.1f}%')
-        axes[0, 0].legend()
-        
-        # Plot 2: Words per Invoice Distribution
-        word_counts = [r['total_words'] for r in successful_results]
-        axes[0, 1].hist(word_counts, bins=20, color='lightgreen', alpha=0.7, edgecolor='black')
-        axes[0, 1].set_title('Words per Invoice Distribution')
-        axes[0, 1].set_xlabel('Word Count')
-        axes[0, 1].set_ylabel('Frequency')
-        axes[0, 1].axvline(np.mean(word_counts), color='red', linestyle='--',
-                          label=f'Mean: {np.mean(word_counts):.1f}')
-        axes[0, 1].legend()
-        
-        # Plot 3: Field Extraction Success Rates
-        field_counts = {}
-        for result in successful_results:
-            for field in result['invoice_fields'].keys():
-                field_counts[field] = field_counts.get(field, 0) + 1
-        
-        if field_counts:
-            fields = list(field_counts.keys())
-            rates = [field_counts[f]/len(successful_results)*100 for f in fields]
-            
-            bars = axes[1, 0].bar(range(len(fields)), rates, color='orange', alpha=0.7)
-            axes[1, 0].set_title('Field Extraction Success Rates')
-            axes[1, 0].set_xlabel('Fields')
-            axes[1, 0].set_ylabel('Success Rate (%)')
-            axes[1, 0].set_xticks(range(len(fields)))
-            axes[1, 0].set_xticklabels(fields, rotation=45, ha='right')
-            
-            # Add percentage labels on bars
-            for bar, rate in zip(bars, rates):
-                height = bar.get_height()
-                axes[1, 0].text(bar.get_x() + bar.get_width()/2., height + 1,
-                               f'{rate:.1f}%', ha='center', va='bottom')
-        
-        # Plot 4: Amount Distribution (if available)
-        if 'total_amount' in all_fields:
-            amounts = []
-            for amount_str in all_fields['total_amount']:
-                try:
-                    clean_amount = re.sub(r'[,$]', '', amount_str)
-                    amount = float(clean_amount)
-                    if amount > 0 and amount < 10000:  # Filter reasonable amounts
-                        amounts.append(amount)
-                except:
-                    pass
-            
-            if amounts:
-                axes[1, 1].hist(amounts, bins=15, color='purple', alpha=0.7, edgecolor='black')
-                axes[1, 1].set_title('Invoice Amount Distribution')
-                axes[1, 1].set_xlabel('Amount ($)')
-                axes[1, 1].set_ylabel('Frequency')
-                axes[1, 1].axvline(np.mean(amounts), color='red', linestyle='--',
-                                  label=f'Mean: ${np.mean(amounts):.2f}')
-                axes[1, 1].legend()
-        else:
-            axes[1, 1].text(0.5, 0.5, 'No amount data\navailable', 
-                           ha='center', va='center', transform=axes[1, 1].transAxes,
-                           fontsize=12, bbox=dict(boxstyle="round,pad=0.3", facecolor="lightgray"))
-            axes[1, 1].set_title('Invoice Amount Distribution')
-        
-        plt.tight_layout()
-        plt.show()
-    
-    
-
-    def visualize_sample_results(self, n_samples=3):
-        """
-        Visualize a small set of sample OCR and extraction results.
-
-        Parameters
-        ----------
-        n_samples : int, optional
-            Number of successful invoice examples to display.
-        """
-        if not hasattr(self, 'full_results'):
-            print("No results to visualize. Run process_dataset first.")
-            return
-        
-        successful_results = [r for r in self.full_results if r['success']][:n_samples]
-        
-        for i, result in enumerate(successful_results):
-            print(f"\n{'='*60}")
-            print(f"Sample {i+1}: {result['filename']}")
-            print(f"{'='*60}")
-            
-            # Show basic stats
-            print(f"Total words detected: {result['total_words']}")
-            print(f"Average confidence: {result['avg_confidence']:.1f}%")
-            
-            # Show extracted invoice fields
-            if result['invoice_fields']:
-                print("\nExtracted Invoice Fields:")
-                for field, value in result['invoice_fields'].items():
-                    print(f"  {field}: {value}")
-            
-            # Show sample text (first 10 words)
-            if result['extracted_text']:
-                print(f"\nSample extracted text (first 10 words):")
-                sample_text = ' '.join([item['text'] for item in result['extracted_text'][:10]])
-                print(f"  {sample_text}...")
-            
-            # Visualize on image
-            if Path(result['image_path']).exists():
-                self.visualize_text_extraction(result['image_path'], result)
-
-    def debug_end_to_end(self, processed_images_df, ground_truth_df, n_samples=5):
+    def debug_end_to_end(self, processed_images_df, ground_truth_df, sample_frac=None, n_samples=5, random_state=42):
         """
         Debug pipeline on a small sample of invoices and print full intermediate outputs.
         """
 
-        # --- Filter valid images ---
         df = processed_images_df[
             (processed_images_df["status"] == "success") &
             (processed_images_df["processed_path"].notnull())
         ]
 
-        sample_df = df.sample(min(n_samples, len(df)), random_state=42)
+        if sample_frac is not None:
+            sample_df = df.sample(frac=sample_frac, random_state=random_state)
+            print(f"Debugging {len(sample_df)} sampled invoices ({sample_frac*100:.1f}%)")
+        else:
+            sample_df = df.sample(min(n_samples, len(df)), random_state=random_state)
+            print(f"Debugging {len(sample_df)} invoices")
 
         for _, row in sample_df.iterrows():
             image_path = row["processed_path"]
             filename = Path(image_path).name
 
-            print("\n" + "="*100)
+            print("\n" + "=" * 100)
             print(f"DEBUGGING FILE: {filename}")
-            print("="*100)
+            print("=" * 100)
 
-            # --- Load image ---
             image = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE)
             if image is None:
                 print("Could not load image")
                 continue
 
-            # =========================================================
-            # 1. OCR WORDS (USING PIPELINE METHOD)
-            # =========================================================
             extracted_text = self._ocr_words(image, confidence_threshold=30, psm=6)
 
             print(f"\nOCR WORDS ({len(extracted_text)} words):")
@@ -1113,16 +959,12 @@ class InvoiceTextDetector:
             if len(extracted_text) > 50:
                 print(f"... ({len(extracted_text)-50} more words)")
 
-            # =========================================================
-            # 2. REGION ASSIGNMENT
-            # =========================================================
             regions = self.assign_regions(extracted_text, image.shape)
 
             print("\nREGION WORD COUNTS:")
             for region, words in regions.items():
                 print(f"{region:10}: {len(words)} words")
 
-            # --- WORDS PER REGION ---
             print("\nWORDS BY REGION:")
             for region, words in regions.items():
                 print(f"\n--- {region.upper()} ---")
@@ -1131,56 +973,36 @@ class InvoiceTextDetector:
                 if len(words) > 30:
                     print(f"... ({len(words)-30} more words)")
 
-            # =========================================================
-            # 3. REGION TEXT RECONSTRUCTION
-            # =========================================================
             print("\nRECONSTRUCTED REGION TEXT:")
-            region_texts = {}
-
             for region, words in regions.items():
-                text_block = self.region_to_text(words)
-                region_texts[region] = text_block
-
                 print(f"\n--- {region.upper()} ---")
+                text_block = self.region_to_text(words)
                 print(text_block if text_block else "[EMPTY]")
-
-            # =========================================================
-            # 4. LABEL-BASED SELLER / CLIENT EXTRACTION DEBUG
-            # =========================================================
-            print("\nSELLER / CLIENT BLOCK OCR DEBUG:")
 
             seller_name, seller_block = self.extract_party_name(image, extracted_text, party="seller")
             client_name, client_block = self.extract_party_name(image, extracted_text, party="client")
+            bottom_fields = self.extract_bottom_totals(regions["bottom"])
 
+            fields = self.extract_invoice_fields_region_aware(image, extracted_text, regions)
+            fields.update(bottom_fields)
+
+            print("\nSELLER / CLIENT BLOCK OCR DEBUG:")
             print("\n--- SELLER BLOCK OCR TEXT ---")
             print(seller_block if seller_block else "[EMPTY]")
 
             print("\n--- CLIENT BLOCK OCR TEXT ---")
             print(client_block if client_block else "[EMPTY]")
 
-            # =========================================================
-            # 5. FIELD EXTRACTION (FULL PIPELINE)
-            # =========================================================
-            fields = self.extract_invoice_fields_region_aware(
-                image,
-                extracted_text,
-                regions
-            )
-
             print("\nEXTRACTED FIELDS:")
             print(f"Invoice Number : {fields.get('invoice_number')}")
             print(f"Invoice Date   : {fields.get('invoice_date')}")
             print(f"Seller Name    : {fields.get('seller_name')}")
             print(f"Client Name    : {fields.get('client_name')}")
+            print(f"Net Worth      : {fields.get('net_worth')}")
             print(f"Total Amount   : {fields.get('total_amount')}")
             print(f"Tax            : {fields.get('tax')}")
 
-            # =========================================================
-            # 6. GROUND TRUTH COMPARISON
-            # =========================================================
-            gt_row = ground_truth_df[
-                ground_truth_df["processed_path"] == image_path
-            ]
+            gt_row = ground_truth_df[ground_truth_df["processed_path"] == image_path]
 
             if not gt_row.empty:
                 gt_row = gt_row.iloc[0]
@@ -1190,10 +1012,281 @@ class InvoiceTextDetector:
                 print(f"Invoice Date   : {gt_row.get('invoice_date')}")
                 print(f"Seller Name    : {gt_row.get('seller_name')}")
                 print(f"Client Name    : {gt_row.get('client_name')}")
+                print(f"Net Worth      : {gt_row.get('net_worth')}")
                 print(f"Total Amount   : {gt_row.get('total_amount')}")
                 print(f"Tax            : {gt_row.get('tax')}")
-
             else:
                 print("\nNo ground truth match found!")
 
-            print("\n" + "="*100 + "\n")
+            print("\n" + "=" * 100 + "\n")
+
+
+
+DEFAULT_FIELDS = [
+    "invoice_number",
+    "invoice_date",
+    "seller_name",
+    "client_name",
+    "tax",
+    "net_worth",
+    "total_amount",
+]
+
+
+def _get_successful_results(results):
+    return [r for r in results if r.get("success")]
+
+
+def _field_display_name(field):
+    rename_map = {
+        "vendor_name": "seller_name",
+    }
+    return rename_map.get(field, field)
+
+
+def _field_extraction_rates(results, fields=DEFAULT_FIELDS):
+    successful = _get_successful_results(results)
+    n = len(successful)
+    if n == 0:
+        return {f: 0.0 for f in fields}
+
+    rates = {}
+    for field in fields:
+        count = 0
+        for r in successful:
+            invoice_fields = r.get("invoice_fields", {})
+            if field in invoice_fields and invoice_fields[field] not in [None, "", np.nan]:
+                count += 1
+            elif field == "seller_name" and "vendor_name" in invoice_fields and invoice_fields["vendor_name"] not in [None, "", np.nan]:
+                count += 1
+        rates[field] = count / n
+    return rates
+
+
+def _field_accuracies(metrics_df, fields=DEFAULT_FIELDS):
+    if metrics_df is None or metrics_df.empty:
+        return {f: np.nan for f in fields}
+
+    df = metrics_df.copy()
+    df["field"] = df["field"].replace({"vendor_name": "seller_name"})
+
+    acc = {}
+    for field in fields:
+        row = df[df["field"] == field]
+        acc[field] = float(row["accuracy"].iloc[0]) if not row.empty else np.nan
+    return acc
+
+
+def _field_outcome_counts(metrics_df, fields=DEFAULT_FIELDS):
+    """
+    Returns counts needed for stacked bars:
+    correct, incorrect, missing_pred
+    """
+    if metrics_df is None or metrics_df.empty:
+        return pd.DataFrame(index=fields, columns=["correct", "incorrect", "missing_pred"]).fillna(0)
+
+    df = metrics_df.copy()
+    df["field"] = df["field"].replace({"vendor_name": "seller_name"})
+    df = df.set_index("field")
+
+    rows = []
+    for field in fields:
+        if field in df.index:
+            gt_count = float(df.loc[field, "ground_truth_count"])
+            pred_count = float(df.loc[field, "predicted_count"])
+            correct = float(df.loc[field, "correct"])
+            incorrect = max(pred_count - correct, 0.0)
+            missing_pred = max(gt_count - pred_count, 0.0)
+        else:
+            correct = 0.0
+            incorrect = 0.0
+            missing_pred = 0.0
+
+        rows.append({
+            "field": field,
+            "correct": correct,
+            "incorrect": incorrect,
+            "missing_pred": missing_pred
+        })
+
+    return pd.DataFrame(rows).set_index("field")
+
+
+def create_analysis_dashboard(
+    results,
+    metrics_df=None,
+    fields=DEFAULT_FIELDS,
+    title="Invoice Processing Analysis Dashboard",
+    save_path=None,
+    show=True,
+):
+    """
+    Standalone dashboard function.
+    Works with any pipeline that returns:
+      - results: list[dict] with keys like success, total_words, avg_confidence, invoice_fields
+      - metrics_df: optional evaluation dataframe from evaluate_against_ground_truth()
+    """
+    successful = _get_successful_results(results)
+    failed = [r for r in results if not r.get("success")]
+
+    print(f"\n{'='*80}")
+    print(title)
+    print(f"{'='*80}")
+
+    print(f"\nPROCESSING OVERVIEW")
+    print(f"{'='*50}")
+    print(f"Total images processed: {len(results):,}")
+    print(f"Successful extractions: {len(successful):,} ({(len(successful)/len(results)*100 if results else 0):.1f}%)")
+    print(f"Failed extractions: {len(failed):,} ({(len(failed)/len(results)*100 if results else 0):.1f}%)")
+
+    if not successful:
+        print("No successful results to analyze.")
+        return None
+
+    word_counts = [r.get("total_words", 0) for r in successful]
+    confidences = [r.get("avg_confidence", 0) for r in successful]
+
+    rates = _field_extraction_rates(results, fields=fields)
+    acc = _field_accuracies(metrics_df, fields=fields) if metrics_df is not None else {f: np.nan for f in fields}
+    outcome_df = _field_outcome_counts(metrics_df, fields=fields)
+
+    print(f"\nOCR QUALITY METRICS")
+    print(f"{'='*50}")
+    print(f"Average words per invoice: {np.mean(word_counts):.1f}")
+    print(f"Median words per invoice: {np.median(word_counts):.0f}")
+    print(f"Word count range: {min(word_counts)} - {max(word_counts)}")
+    print(f"Average OCR confidence: {np.mean(confidences):.1f}%")
+    print(f"Median OCR confidence: {np.median(confidences):.1f}%")
+    print(f"Confidence range: {min(confidences):.1f}% - {max(confidences):.1f}%")
+
+    print(f"\nFIELD EXTRACTION SUCCESS RATES")
+    print(f"{'='*50}")
+    for field in fields:
+        print(f"  {field:15}: {rates[field]*100:5.1f}%")
+
+    if metrics_df is not None and not metrics_df.empty:
+        print(f"\nFIELD-LEVEL EXACT MATCH ACCURACIES")
+        print(f"{'='*50}")
+        for field in fields:
+            if pd.notna(acc[field]):
+                print(f"  {field:15}: {acc[field]*100:5.1f}%")
+
+    fig, axes = plt.subplots(2, 2, figsize=(16, 14))
+    fig.suptitle(title, fontsize=16, fontweight="bold")
+
+    # 1) OCR confidence distribution
+    axes[0, 0].hist(confidences, bins=20, alpha=0.8, edgecolor="black")
+    axes[0, 0].set_title("OCR Confidence Distribution")
+    axes[0, 0].set_xlabel("Confidence (%)")
+    axes[0, 0].set_ylabel("Frequency")
+    axes[0, 0].axvline(np.mean(confidences), linestyle="--", label=f"Mean: {np.mean(confidences):.1f}%")
+    axes[0, 0].legend()
+
+    # 2) Accuracy for the requested fields
+    if metrics_df is not None and not metrics_df.empty:
+        acc_vals = [acc[field] for field in fields]
+        bars = axes[0, 1].bar(range(len(fields)), acc_vals, alpha=0.85, edgecolor="black")
+        axes[0, 1].set_title("Field-Level Exact Match Accuracy")
+        axes[0, 1].set_ylabel("Accuracy")
+        axes[0, 1].set_xticks(range(len(fields)))
+        axes[0, 1].set_xticklabels(fields, rotation=45, ha="right")
+        axes[0, 1].set_ylim(0, 1.05)
+
+        for bar, v in zip(bars, acc_vals):
+            if pd.notna(v):
+                axes[0, 1].text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.02, f"{v*100:.1f}%",
+                                ha="center", va="bottom", fontsize=9)
+    else:
+        axes[0, 1].text(0.5, 0.5, "No evaluation metrics\na vailable", ha="center", va="center",
+                        transform=axes[0, 1].transAxes, fontsize=12)
+        axes[0, 1].set_title("Field-Level Exact Match Accuracy")
+
+    # 3) Field extraction success rates
+    rates_vals = [rates[field] * 100 for field in fields]
+    bars = axes[1, 0].bar(range(len(fields)), rates_vals, alpha=0.85, edgecolor="black")
+    axes[1, 0].set_title("Field Extraction Success Rates")
+    axes[1, 0].set_ylabel("Success Rate (%)")
+    axes[1, 0].set_xticks(range(len(fields)))
+    axes[1, 0].set_xticklabels(fields, rotation=45, ha="right")
+    axes[1, 0].set_ylim(0, 105)
+
+    for bar, v in zip(bars, rates_vals):
+        axes[1, 0].text(bar.get_x() + bar.get_width()/2, bar.get_height() + 1,
+                        f"{v:.1f}%", ha="center", va="bottom", fontsize=9)
+
+    # 4) Stacked outcome breakdown
+    if metrics_df is not None and not metrics_df.empty:
+        x = np.arange(len(fields))
+        correct = outcome_df.loc[fields, "correct"].values
+        incorrect = outcome_df.loc[fields, "incorrect"].values
+        missing_pred = outcome_df.loc[fields, "missing_pred"].values
+
+        axes[1, 1].bar(x, correct, label="Correct", alpha=0.85, edgecolor="black")
+        axes[1, 1].bar(x, incorrect, bottom=correct, label="Incorrect", alpha=0.85, edgecolor="black")
+        axes[1, 1].bar(x, missing_pred, bottom=correct + incorrect, label="Missing prediction", alpha=0.85, edgecolor="black")
+
+        axes[1, 1].set_title("Prediction Outcome Breakdown")
+        axes[1, 1].set_ylabel("Count")
+        axes[1, 1].set_xticks(x)
+        axes[1, 1].set_xticklabels(fields, rotation=45, ha="right")
+        axes[1, 1].legend()
+    else:
+        axes[1, 1].text(0.5, 0.5, "No evaluation metrics\navailable", ha="center", va="center",
+                        transform=axes[1, 1].transAxes, fontsize=12)
+        axes[1, 1].set_title("Prediction Outcome Breakdown")
+
+    plt.tight_layout()
+
+    if save_path is not None:
+        plt.savefig(save_path, dpi=200, bbox_inches="tight")
+
+    if show:
+        plt.show()
+    else:
+        plt.close(fig)
+
+    return {
+        "total_processed": len(results),
+        "successful": len(successful),
+        "failed": len(failed),
+        "field_extraction_rates": rates,
+        "field_accuracies": acc,
+        "avg_confidence": float(np.mean(confidences)),
+        "avg_words": float(np.mean(word_counts)),
+    }
+
+
+def visualize_sample_results(
+    results,
+    visualize_text_fn=None,
+    n_samples=3,
+    title="Sample OCR Results"
+):
+    """
+    Standalone sample visualizer.
+    `visualize_text_fn` should be a callable like:
+        visualize_text_fn(image_path, result_dict)
+    """
+    successful = _get_successful_results(results)[:n_samples]
+
+    for i, result in enumerate(successful, start=1):
+        print(f"\n{'='*60}")
+        print(f"Sample {i}: {result.get('filename', 'unknown')}")
+        print(f"{'='*60}")
+
+        print(f"Total words detected: {result.get('total_words', 0)}")
+        print(f"Average confidence: {result.get('avg_confidence', 0):.1f}%")
+
+        invoice_fields = result.get("invoice_fields", {})
+        if invoice_fields:
+            print("\nExtracted Invoice Fields:")
+            for field, value in invoice_fields.items():
+                print(f"  {field}: {value}")
+
+        if result.get("extracted_text"):
+            sample_text = " ".join([item["text"] for item in result["extracted_text"][:10]])
+            print(f"\nSample extracted text (first 10 words):")
+            print(f"  {sample_text}...")
+
+        if visualize_text_fn is not None and result.get("image_path") and Path(result["image_path"]).exists():
+            visualize_text_fn(result["image_path"], result)

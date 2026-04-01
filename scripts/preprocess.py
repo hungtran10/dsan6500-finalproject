@@ -12,10 +12,9 @@ import cv2
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 
-def preprocess_csv_files(input_path, output_path, csv_files = None):
-
+def preprocess_csv_files(input_path, output_path, csv_files=None):
     """
-    Function that loads CSVs (single, list, or default batch), 
+    Function that loads CSVs (single, list, or default batch),
     combines and extracts data-type enforced data.
     """
 
@@ -23,17 +22,14 @@ def preprocess_csv_files(input_path, output_path, csv_files = None):
 
     # Handle variable input types for csv_files
     if csv_files is None:
-        # Default batch if nothing is provided
         csv_paths = [
             input_path / "batch1_1.csv",
             input_path / "batch1_2.csv",
             input_path / "batch1_3.csv"
         ]
     elif isinstance(csv_files, (str, Path)):
-        # If a single string/path is passed, wrap it in a list
         csv_paths = [input_path / Path(csv_files).name]
     else:
-        # If a list is passed, ensure they are Path objects
         csv_paths = [input_path / Path(p).name for p in csv_files]
 
     dfs = []
@@ -48,7 +44,6 @@ def preprocess_csv_files(input_path, output_path, csv_files = None):
     if not dfs:
         raise FileNotFoundError("No CSVs were found or loaded. Check your paths!")
 
-    # Combine all DataFrames
     df = pd.concat(dfs, ignore_index=True)
 
     # Parse Json Data column
@@ -66,34 +61,23 @@ def preprocess_csv_files(input_path, output_path, csv_files = None):
             "invoice_date": invoice.get("invoice_date"),
             "due_date": invoice.get("due_date"),
             "tax": subtotal.get("tax"),
-            "total_amount": subtotal.get("total")
+            "total_amount": subtotal.get("total"),
+            "net_worth": np.nan,   # filled in later after numeric conversion
         })
 
     fields = df["parsed_json"].apply(extract_fields)
-
-    # Concatenate results
     df = pd.concat([df, fields], axis=1)
 
     # Remove records with duplicate file names
-    df.drop_duplicates(subset=['File Name'], inplace=True)
+    df.drop_duplicates(subset=["File Name"], inplace=True)
 
-    # Function to handle data type and formatting
     def enforce_invoice_dtypes(df):
-
-        text_cols = [
-            "client_name",
-            "seller_name",
-            "invoice_number"
-        ]
-
-        date_cols = [
-            "invoice_date",
-            "due_date"
-        ]
+        text_cols = ["client_name", "seller_name", "invoice_number"]
+        date_cols = ["invoice_date", "due_date"]
 
         df = df.copy()
 
-        # TEXT FIELDS 
+        # TEXT FIELDS
         for col in text_cols:
             df[col] = (
                 df[col]
@@ -102,24 +86,18 @@ def preprocess_csv_files(input_path, output_path, csv_files = None):
                 .replace("", np.nan)
             )
 
-        # DATE FIELDS 
+        # DATE FIELDS
         for col in date_cols:
-
             df[col] = (
                 df[col]
                 .astype(str)
                 .str.strip()
                 .replace("", np.nan)
             )
+            df[col] = pd.to_datetime(df[col], errors="coerce")
 
-            df[col] = pd.to_datetime(
-                df[col],
-                errors="coerce"
-            )
-
-        # CLEAN NUMERIC STRINGS 
+        # CLEAN NUMERIC STRINGS
         for col in ["tax", "total_amount"]:
-
             df[col] = (
                 df[col]
                 .astype(str)
@@ -130,23 +108,18 @@ def preprocess_csv_files(input_path, output_path, csv_files = None):
                 .replace("", np.nan)
             )
 
-        #  HANDLE TAX PERCENTAGES 
         def compute_tax_value(tax_val, total_val):
-
             if pd.isna(tax_val):
                 return np.nan
 
             # Percentage case
             if isinstance(tax_val, str) and tax_val.endswith("%"):
-
                 try:
-                    rate = float(tax_val.replace("%","")) / 100
+                    rate = float(tax_val.replace("%", "")) / 100
                     total_val = float(total_val)
                     subtotal = total_val / (1 + rate)
                     tax_amount = total_val - subtotal
-
                     return tax_amount
-
                 except:
                     return np.nan
 
@@ -156,28 +129,27 @@ def preprocess_csv_files(input_path, output_path, csv_files = None):
             except:
                 return np.nan
 
-        # CONVERT TOTAL to numeric
-        df["total_amount"] = pd.to_numeric(
-            df["total_amount"],
-            errors="coerce"
-        )
+        # Convert total_amount to numeric
+        df["total_amount"] = pd.to_numeric(df["total_amount"], errors="coerce")
 
-        # COMPUTE TAX
+        # Compute tax as amount
         df["tax"] = df.apply(
             lambda row: compute_tax_value(row["tax"], row["total_amount"]),
             axis=1
         )
+
+        # Compute net_worth = total_amount - tax
+        df["net_worth"] = np.round(df["total_amount"] - df["tax"], 2)
 
         return df
 
     df = enforce_invoice_dtypes(df)
 
     # Drop unnecessary columns
-    df = df.drop(columns=['parsed_json', 'Json Data'])
-
+    df = df.drop(columns=["parsed_json", "Json Data"])
 
     # Save DataFrame as CSV
-    df.to_csv(output_path)
+    df.to_csv(output_path, index=False)
 
     return df
 
