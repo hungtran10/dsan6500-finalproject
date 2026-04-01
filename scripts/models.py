@@ -13,7 +13,7 @@ import warnings
 
 warnings.filterwarnings('ignore')
 
-class InvoiceTextDetector:
+class PytesseractInvoiceTextDetector:
     """
     Text detection and OCR extraction for preprocessed invoice images
     """
@@ -24,6 +24,22 @@ class InvoiceTextDetector:
         self.tesseract_config = r'--oem 3 --psm 6 -c tessedit_char_whitelist=0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz.,:-$€£¥₹()[] '
 
     def assign_regions(self, extracted_text, image_shape):
+        """
+        Assign OCR words to coarse invoice layout regions based on position.
+
+        Parameters
+        ----------
+        extracted_text : list[dict]
+            OCR word records, each containing at least a "bbox" key in (x, y, w, h) format.
+        image_shape : tuple
+            Shape of the image array, typically (height, width) or (height, width, channels).
+
+        Returns
+        -------
+        dict
+            Dictionary of region names mapped to lists of OCR word records.
+            Regions include: top_left, seller, client, table, and bottom.
+        """
         h, w = image_shape[:2]
 
         regions = {
@@ -66,6 +82,19 @@ class InvoiceTextDetector:
         return regions
     
     def region_to_text(self, region_words):
+        """
+        Reconstruct text from OCR words within a region by grouping words into lines.
+
+        Parameters
+        ----------
+        region_words : list[dict]
+            OCR word records for a single region.
+
+        Returns
+        -------
+        str
+            Reconstructed multi-line text for the region, or an empty string if no words are provided.
+        """
         if not region_words:
             return ""
 
@@ -80,7 +109,23 @@ class InvoiceTextDetector:
 
     def _ocr_words(self, image, confidence_threshold=30, psm=6, extra_config=""):
         """
-        Run Tesseract OCR on a grayscale image array and return filtered word records.
+        Run Tesseract OCR on a grayscale image and return filtered word-level results.
+
+        Parameters
+        ----------
+        image : numpy.ndarray
+            Grayscale image array to OCR.
+        confidence_threshold : int, optional
+            Minimum confidence score required to keep a detected word.
+        psm : int, optional
+            Tesseract page segmentation mode.
+        extra_config : str, optional
+            Additional Tesseract configuration string.
+
+        Returns
+        -------
+        list[dict]
+            List of OCR word records containing text, confidence, bounding box, and OCR indices.
         """
         config = f'--oem 3 --psm {psm} {extra_config}'.strip()
 
@@ -120,8 +165,20 @@ class InvoiceTextDetector:
     
     def _cluster_words_by_line(self, words, y_tol=None):
         """
-        Group OCR words into approximate text lines using y-position.
-        Returns a list of dicts: [{"y": ..., "words": [...]}, ...]
+        Group OCR words into approximate text lines using vertical proximity.
+
+        Parameters
+        ----------
+        words : list[dict]
+            OCR word records, each containing a "bbox" key.
+        y_tol : int or None, optional
+            Maximum vertical distance between words to consider them part of the same line.
+            If None, a data-driven tolerance is computed from median word height.
+
+        Returns
+        -------
+        list[dict]
+            List of line groups, where each group contains a y-position and the words assigned to that line.
         """
         if not words:
             return []
@@ -155,6 +212,19 @@ class InvoiceTextDetector:
         - smallest numeric summary value -> tax
         - middle value                  -> net_worth
         - largest value                  -> total_amount
+
+        Parameters
+        ----------
+        bottom_words : list[dict]
+            OCR word records from the bottom region of the invoice.
+
+        Returns
+        -------
+        dict
+            Dictionary containing any of the following keys when detected:
+            - tax
+            - net_worth
+            - total_amount
         """
         if not bottom_words:
             return {}
@@ -285,6 +355,18 @@ class InvoiceTextDetector:
     def _find_label_word(self, extracted_text, label_pattern):
         """
         Find the first OCR word matching a label pattern such as Seller or Client.
+
+        Parameters
+        ----------
+        extracted_text : list[dict]
+            OCR word records for the full page.
+        label_pattern : str
+            Regular expression pattern used to identify the label word.
+
+        Returns
+        -------
+        dict or None
+            The first matching OCR word record, or None if no match is found.
         """
         for item in extracted_text:
             if re.search(label_pattern, item["text"], re.IGNORECASE):
@@ -294,6 +376,16 @@ class InvoiceTextDetector:
     def _normalize_date(self, value):
         """
         Convert dates like 12/20/2014 or 12-20-14 to YYYY-MM-DD.
+
+        Parameters
+        ----------
+        value : any
+            Raw date value extracted from OCR or ground truth.
+
+        Returns
+        -------
+        str or None
+            Normalized date string in YYYY-MM-DD format, or None if parsing fails.
         """
         if value is None or pd.isna(value):
             return None
@@ -315,6 +407,16 @@ class InvoiceTextDetector:
         - 1 140,24 -> 1140.24
         - 1,140.24 -> 1140.24
         - 103,66   -> 103.66
+
+        Parameters
+        ----------
+        value : any
+            Raw money value extracted from OCR or ground truth.
+
+        Returns
+        -------
+        str or None
+            Normalized numeric string such as '1140.24', or None if parsing fails.
         """
         if value is None or pd.isna(value):
             return None
@@ -346,6 +448,20 @@ class InvoiceTextDetector:
         3) stopping crop before the table starts
         4) OCR'ing the crop
         5) selecting the most likely name line
+
+        Parameters
+        ----------
+        image : numpy.ndarray
+            Grayscale invoice image.
+        extracted_text : list[dict]
+            OCR word records from the full page.
+        party : str, optional
+            Party to extract; expected values are "seller" or "client".
+
+        Returns
+        -------
+        tuple or None
+            A tuple of (extracted_name, crop_ocr_text) if a name is found, otherwise (None, crop_ocr_text).
         """
         h, w = image.shape[:2]
         mid = w // 2
@@ -385,6 +501,22 @@ class InvoiceTextDetector:
         return None, block_text
     
     def _extract_party_name_from_block_text(self, block_text, party):
+        """
+        Select the most likely seller or client name from OCR text produced by a cropped region.
+
+        Parameters
+        ----------
+        block_text : str
+            OCR text extracted from the cropped seller/client block.
+        party : str
+            Party being extracted; expected values are "seller" or "client".
+
+        Returns
+        -------
+        str or None
+            The extracted party name, or None if no plausible name line is found.
+        """
+
         lines = [re.sub(r"\s+", " ", line).strip() for line in block_text.splitlines()]
         lines = [line for line in lines if line]
 
@@ -405,6 +537,21 @@ class InvoiceTextDetector:
         return None
     
     def _first_match(self, text, patterns):
+        """
+        Return the first regex capture match found in a text string.
+
+        Parameters
+        ----------
+        text : str
+            Text to search.
+        patterns : list[str]
+            Ordered list of regular expression patterns to try.
+
+        Returns
+        -------
+        str or None
+            The first matched capture group, or None if no pattern matches.
+        """
         for pattern in patterns:
             m = re.search(pattern, text, re.IGNORECASE | re.MULTILINE)
             if m:
@@ -412,6 +559,30 @@ class InvoiceTextDetector:
         return None
 
     def extract_invoice_fields_region_aware(self, image, extracted_text, regions):
+        """
+        Extract structured invoice fields using layout-aware OCR regions.
+
+        Parameters
+        ----------
+        image : numpy.ndarray
+            Grayscale invoice image.
+        extracted_text : list[dict]
+            OCR word records from the full page.
+        regions : dict
+            Region dictionary produced by assign_regions().
+
+        Returns
+        -------
+        dict
+            Dictionary of extracted invoice fields such as:
+            - invoice_number
+            - invoice_date
+            - seller_name
+            - client_name
+            - tax
+            - net_worth
+            - total_amount
+        """
         fields = {}
 
         top_left_text = self.region_to_text(regions["top_left"])
@@ -452,19 +623,18 @@ class InvoiceTextDetector:
     
     def extract_table_dataframe(self, table_words):
         """
-        Convert the table region into a line-item DataFrame.
+        Parse the invoice line-item table into a structured pandas DataFrame.
 
-        Output columns:
-        - row_num
-        - item_no
-        - description
-        - qty
-        - um
-        - net_price
-        - net_worth
-        - vat_pct
-        - gross_worth
-        - raw_text
+        Parameters
+        ----------
+        table_words : list[dict]
+            OCR word records assigned to the table region.
+
+        Returns
+        -------
+        pandas.DataFrame
+            DataFrame containing line-item rows and parsed columns such as item number,
+            description, quantity, unit, net price, net worth, VAT percentage, and gross worth.
         """
         if not table_words:
             return pd.DataFrame()
@@ -591,6 +761,20 @@ class InvoiceTextDetector:
         return df
     
     def process_single_image(self, image_path):
+        """
+        Run OCR, region assignment, field extraction, and table parsing for one invoice image.
+
+        Parameters
+        ----------
+        image_path : str or Path
+            Path to the preprocessed invoice image.
+
+        Returns
+        -------
+        dict
+            Per-image result dictionary containing image metadata, OCR words, extracted fields,
+            parsed table data, and processing success status.
+        """
         result = {
             "image_path": str(image_path),
             "filename": Path(image_path).name,
@@ -629,6 +813,27 @@ class InvoiceTextDetector:
         successful_images = processed_images_df[
             processed_images_df["status"] == "success"
         ]
+        """
+        Process a dataset of preprocessed invoice images and save aggregated OCR outputs.
+
+        Parameters
+        ----------
+        processed_images_df : pandas.DataFrame
+            DataFrame containing at least status and processed_path columns.
+        batch_size : int, optional
+            Number of images to process per batch.
+        save_word_level : bool, optional
+            Whether to save word-level OCR output to CSV.
+        sample_frac : float or None, optional
+            Fraction of successful images to sample for processing.
+        random_state : int, optional
+            Random seed used when sampling.
+
+        Returns
+        -------
+        pandas.DataFrame
+            Summary DataFrame with one row per processed image.
+        """
 
         if sample_frac is not None:
             successful_images = successful_images.sample(frac=sample_frac, random_state=random_state)
@@ -705,7 +910,19 @@ class InvoiceTextDetector:
     
     def _find_anchor_y(self, extracted_text, pattern):
         """
-        Return the smallest y-position of any word matching the pattern.
+        Find the vertical position of the first matching anchor word.
+
+        Parameters
+        ----------
+        extracted_text : list[dict]
+            OCR word records for the full page.
+        pattern : str
+            Regular expression pattern used to find the anchor word.
+
+        Returns
+        -------
+        int or None
+            The smallest y-position among matching words, or None if no match is found.
         """
         ys = [
             item["bbox"][1]
@@ -715,6 +932,24 @@ class InvoiceTextDetector:
         return min(ys) if ys else None
     
     def evaluate_against_ground_truth(self, ground_truth_df, merge_key="processed_file", restrict_to_matched=True):
+        """
+        Compare extracted invoice fields against ground-truth values using exact-match metrics.
+
+        Parameters
+        ----------
+        ground_truth_df : pandas.DataFrame
+            Ground-truth dataset containing the labeled invoice fields.
+        merge_key : str, optional
+            Column used to align predictions with ground truth.
+        restrict_to_matched : bool, optional
+            Whether to score only rows present in both predictions and ground truth.
+
+        Returns
+        -------
+        tuple
+            A tuple of (metrics_df, overall_metrics), where metrics_df contains per-field
+            accuracy, precision, recall, and F1, and overall_metrics contains micro-averaged scores.
+        """
         if not hasattr(self, "full_results"):
             raise ValueError("Run process_dataset() first.")
 
@@ -841,12 +1076,16 @@ class InvoiceTextDetector:
     
     def _print_summary(self, results):
         """
-        Print a summary of OCR and invoice field extraction results.
+        Print aggregate OCR and field extraction statistics for a batch of processed images.
 
         Parameters
         ----------
         results : list[dict]
-            List of per-image result dictionaries produced by process_single_image function.
+            List of per-image result dictionaries returned by process_single_image().
+
+        Returns
+        -------
+        None
         """
         successful = [r for r in results if r['success']]
         failed = [r for r in results if not r['success']]
@@ -877,14 +1116,18 @@ class InvoiceTextDetector:
     
     def visualize_text_extraction(self, image_path, result):
         """
-        Visualize OCR word boxes and extracted invoice fields for a single image.
+        Visualize OCR word boxes and extracted fields for a single invoice image.
 
         Parameters
         ----------
         image_path : str or Path
             Path to the invoice image.
         result : dict
-            Result dictionary returned by process_single_image.
+            Result dictionary returned by process_single_image().
+
+        Returns
+        -------
+        None
         """
         image = cv2.imread(str(image_path))
         if image is None:
@@ -923,7 +1166,24 @@ class InvoiceTextDetector:
 
     def debug_end_to_end(self, processed_images_df, ground_truth_df, sample_frac=None, n_samples=5, random_state=42):
         """
-        Debug pipeline on a small sample of invoices and print full intermediate outputs.
+        Print end-to-end debugging output for a small sample of invoices.
+
+        Parameters
+        ----------
+        processed_images_df : pandas.DataFrame
+            DataFrame containing processed invoice image paths and status values.
+        ground_truth_df : pandas.DataFrame
+            Ground-truth labels for the same invoices.
+        sample_frac : float or None, optional
+            Fraction of eligible rows to sample for debugging.
+        n_samples : int, optional
+            Number of samples to inspect when sample_frac is not provided.
+        random_state : int, optional
+            Random seed used when sampling.
+
+        Returns
+        -------
+        None
         """
 
         df = processed_images_df[
@@ -1112,14 +1372,8 @@ def _field_outcome_counts(metrics_df, fields=DEFAULT_FIELDS):
     return pd.DataFrame(rows).set_index("field")
 
 
-def create_analysis_dashboard(
-    results,
-    metrics_df=None,
-    fields=DEFAULT_FIELDS,
-    title="Invoice Processing Analysis Dashboard",
-    save_path=None,
-    show=True,
-):
+def create_analysis_dashboard(results, metrics_df=None, fields=DEFAULT_FIELDS, title="Invoice Processing Analysis Dashboard",
+    save_path=None,show=True):
     """
     Standalone dashboard function.
     Works with any pipeline that returns:
@@ -1256,12 +1510,7 @@ def create_analysis_dashboard(
     }
 
 
-def visualize_sample_results(
-    results,
-    visualize_text_fn=None,
-    n_samples=3,
-    title="Sample OCR Results"
-):
+def visualize_sample_results(results, visualize_text_fn=None, n_samples=3, title="Sample OCR Results"):
     """
     Standalone sample visualizer.
     `visualize_text_fn` should be a callable like:
