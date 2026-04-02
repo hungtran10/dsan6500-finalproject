@@ -38,11 +38,8 @@ from transformers import (
 )
 
 
-# -----------------------------------------------------------------------------
+
 # Configuration / device helpers
-# -----------------------------------------------------------------------------
-
-
 @dataclass
 class DonutFineTuningConfig:
     """Configuration for Donut fine-tuning on invoice documents."""
@@ -91,11 +88,7 @@ def recommend_donut_batch_sizes(device: torch.device, model_name: str = "") -> T
     return 1, 1, 1
 
 
-# -----------------------------------------------------------------------------
 # Normalization helpers
-# -----------------------------------------------------------------------------
-
-
 def normalize_money(value: Any) -> Optional[str]:
     """Normalize money strings to a plain decimal string with two places."""
     if value is None or (isinstance(value, float) and np.isnan(value)):
@@ -238,11 +231,8 @@ def normalize_line_items_payload(payload: Any) -> List[Dict[str, Any]]:
     return normalized
 
 
-# -----------------------------------------------------------------------------
+
 # Training-frame builder
-# -----------------------------------------------------------------------------
-
-
 def build_donut_pretraining_frame(
     ground_truth_df: pd.DataFrame,
     image_col: str = "processed_path",
@@ -326,11 +316,8 @@ def build_donut_pretraining_frame(
     return pd.DataFrame(rows)
 
 
-# -----------------------------------------------------------------------------
+
 # Dataset / collator / trainer
-# -----------------------------------------------------------------------------
-
-
 def augment_document_image(image: Image.Image) -> Image.Image:
     """Apply conservative document-safe augmentation."""
     if random.random() < 0.5:
@@ -424,9 +411,9 @@ class WeightedDonutTrainer(Seq2SeqTrainer):
         return (loss, outputs) if return_outputs else loss
 
 
-# -----------------------------------------------------------------------------
+
 # Validation metrics
-# -----------------------------------------------------------------------------
+
 
 
 def build_donut_compute_metrics(processor: DonutProcessor):
@@ -506,11 +493,8 @@ def build_donut_compute_metrics(processor: DonutProcessor):
     return compute_metrics
 
 
-# -----------------------------------------------------------------------------
+
 # Training entry point
-# -----------------------------------------------------------------------------
-
-
 def train_donut_invoice_model(
     ground_truth_df: pd.DataFrame,
     output_dir: str | Path = "./donut_model",
@@ -700,9 +684,8 @@ def train_donut_invoice_model(
     }
 
 
-# -----------------------------------------------------------------------------
 # Usage notes
-# -----------------------------------------------------------------------------
+
 # 1) Invoice-only fine-tuning:
 #    train_donut_invoice_model(ground_truth_df, task_mode="invoice", augment_factor=2)
 #
