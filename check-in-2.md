@@ -11,7 +11,7 @@ The biggest limitation to this approach is the zonal mapping makes the text dete
 ## CNN-based Model - Pytesseract Pipeline
 This model - `PytesseractInvoiceTextDetector` uses Heuristic Layout Analysis. It basically reads the document to find anchor points and dynamically determines where regions begin and end. It is a structural parsing engine that converts unstructured OCR word-blobs into a hierarchical document model. It moves beyond simple coordinate cropping by using document anchors and arithmetic validation. 
 
-This pipeline is a significant step up in complexity. While the previous version relied on fixed spatial coordinates, the `PytesseractInvoiceTextDetector` uses **Heuristic Layout Analysis**. It "reads" the document to find anchor points and dynamically determines where regions begin and end. It is a structural parsing engine that converts unstructured OCR word-blobs into a hierarchical document model. It moves beyond simple coordinate cropping by using document anchors and arithmetic validation.
+While the previous version relied on fixed spatial coordinates, the `PytesseractInvoiceTextDetector` uses **Heuristic Layout Analysis**. It "reads" the document to find anchor points and dynamically determines where regions begin and end. It is a structural parsing engine that converts unstructured OCR word-blobs into a hierarchical document model. It moves beyond simple coordinate cropping by using document anchors and arithmetic validation.
 
 ### 1. Dynamic Region Assignment
 Instead of using hardcoded boxes, the pipeline identifies key layout landmarks to segment the page into logical zones:
@@ -54,7 +54,7 @@ One of the most complex features is the `extract_table_dataframe` method, which 
 
 ### 1. Zonal Pipeline (Coordinate-Based)
 * **Strengths:** Achieved near-perfect scores for `invoice_number` (1.0 F1) and `client_name` (0.99 F1). This confirms that header information in this dataset is highly standardized in its spatial positioning.
-* **Weaknesses:** Failed critically on financial fields (`tax`, `total_amount`, `net_worth`), with recall scores dropping below **10%**.
+* **Weaknesses:** Failed critically on financial fields (`tax`, `total_amount`, `net_worth`), with recall scores dropping below **10%**. The formatting of these fields (e.g. $ symbol) in the invoices hampered the model's current ability to extract text. 
 * **Analysis:** Because the Zonal pipeline relies on static (x, y) coordinates, it cannot account for vertical shifts. If an invoice has more line items than the template expects, the "Totals" block is pushed down, falling outside the pre-defined extraction zone.
 
 ### 2. Layout-Aware Pipeline (Heuristic-Based)
@@ -112,11 +112,11 @@ One of the most complex features is the `extract_table_dataframe` method, which 
 
 ## Drawbacks of the Layout-Aware Pipline
 
-* Layout/format inconsistencies: PyTesseract extracts raw text without semantic understanding.
+* Layout/format inconsistencies: PyTesseract extracts raw text without semantic understanding. 
 Example: Fields like Net Worth or Total Amount may appear in different positions across extracted text. PyTesseract captures text but cannot reliably map them to structured labels.
 Pattern: Field misalignment and missing mappings cause systematic errors in field extraction.
 
-* Failure on complex layouts: PyTesseract reads text linearly so it doesn’t handle multi-column or table structures natively.
+* Failure on complex layouts: PyTesseract reads text linearly so it doesn’t handle multi-column or table structures natively. I addressed this by creating methods that extracted information from these visual structures.  
 Example: A table of line items with multiple columns (item, quantity, price) may get flattened, concatenated, or misaligned.
 Pattern: Structured fields like tables, headers, and footers break, especially when alignment is inconsistent or fonts vary.
 

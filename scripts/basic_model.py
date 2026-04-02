@@ -101,9 +101,9 @@ class InvoiceZonalOCRPipeline:
             "client_name": 6,
         }
 
-    # ---------------------------
+    
     # Preprocessing
-    # ---------------------------
+    
     def load_image(self, image_path: str) -> Optional[np.ndarray]:
         img = cv2.imread(str(image_path))
         return img
@@ -177,9 +177,9 @@ class InvoiceZonalOCRPipeline:
         cleaned = self.clean_image(img)
         return cleaned
 
-    # ---------------------------
+    
     # ROI extraction
-    # ---------------------------
+    
     def get_template_zones(self, template_name: str = "default") -> Dict[str, Tuple[float, float, float, float]]:
         return self.template_zones.get(template_name, self.template_zones["default"])
 
@@ -230,9 +230,9 @@ class InvoiceZonalOCRPipeline:
         plt.title(f"Configured zones: {Path(image_path).name}")
         plt.show()
 
-    # ---------------------------
+    
     # OCR
-    # ---------------------------
+    
     def ocr_image(self, image: np.ndarray, psm: Optional[int] = None) -> str:
         """
         Run OCR using legacy Tesseract (OEM 0). Falls back to LSTM (OEM 1) if needed.
