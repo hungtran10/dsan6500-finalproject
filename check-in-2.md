@@ -58,7 +58,7 @@ One of the most complex features is the `extract_table_dataframe` method, which 
 * **Analysis:** Because the Zonal pipeline relies on static (x, y) coordinates, it cannot account for vertical shifts. If an invoice has more line items than the template expects, the "Totals" block is pushed down, falling outside the pre-defined extraction zone.
 
 ### 2. Layout-Aware Pipeline (Heuristic-Based)
-* **Strengths:** Dramatically improved performance on financial totals, with F1 scores rising from **~0.15 to ~0.90**. It achieved an **Overall F1-Score of 0.946**.
+* **Strengths:** Dramatically improved performance on net worth, tax and total amounts, with F1 scores rising from **~0.15 to ~0.90**. It achieved an **Overall F1-Score of 0.946**.
 * **Precision vs. Recall:** The pipeline maintains very high precision (~0.98), meaning when it extracts a value, it is almost certainly correct. The slight dip in recall for financial fields (indices 4-6) suggests that in some complex layouts, the anchor words (like "Total") were either missing or obscured.
 * **Analysis:** By using "items" and "summary" as anchors to dynamically define regions, this pipeline successfully follows the "flow" of the document. It effectively "finds" the data rather than just "looking" at a spot.
 
@@ -112,46 +112,47 @@ One of the most complex features is the `extract_table_dataframe` method, which 
 
 ## Drawbacks of the Layout-Aware Pipline
 
-Here’s a structured **failure analysis** for the `PytesseractInvoiceTextDetector` pipeline based on the issues you encountered and the general behavior of Tesseract OCR on invoice datasets:
-
----
-
 ## **1. What breaks and why**
 
 ### **a) OCR Extraction Failure**
 
-* **Observation:** Many invoice images returned either empty text or garbled text with repeated numbers or letters (e.g., `"se se se..."` or `"19 19 19..."`).
-* **Reason:** Pytesseract is highly sensitive to image quality, noise, and layout complexity. Issues include:
-
-  * **Low resolution / blurred scans** – small or thin fonts may not be recognized.
-  * **Complex layouts** – multiple columns, tables, or unusual text alignment confuse the OCR engine.
-  * **Non-standard fonts** – decorative or stylized fonts reduce Tesseract accuracy.
+* **Observation:** During my refinement of the pipeline, many invoice images returned either empty text or misclassified text.
+* **Reason:** Pytesseract is highly sensitive to image quality, noise, and layout complexity. I
 
 ### **b) Field-level extraction failure**
 
-* **Observation:** Even when some text is extracted, structured fields like `invoice_number`, `total_amount`, `invoice_date` often remain empty.
+* **Observation:** Even when some text is extracted, structured fields like `invoice_number`, `total_amount`, `invoice_date` can remain empty.
 * **Reason:** The pipeline relies on post-processing heuristics (regex patterns, keyword matching) which fail when:
 
   * The OCR output is noisy or partially recognized.
   * The invoice deviates from expected formats.
   * Numbers and symbols are misinterpreted (e.g., `0` → `O`, `1` → `I`, `.` → `,`).
 
-### **c) Confidence metrics are NaN**
-
-* **Observation:** In the pipeline’s summary DataFrame, `avg_confidence` is often NaN.
-* **Reason:** Pytesseract’s Python API does not always return word-level confidence, or parsing confidence fails for very short or malformed text outputs.
-
----
-
 ## **2. Concrete failure examples**
 
 ### **Example 1: Garbled table**
 
-* Image contains an invoice table with line items.
-* OCR output:
+* Pipeline is unable to differentiate between Net Worth (Subtotal) and Total Amount
+* Output from a debugging step:
 
   ```
-  19 19 19 19 19 19 19 19 19 19 19 19 ...
+    EXTRACTED FIELDS:
+    Invoice Number : 32830026
+    Invoice Date   : 2014-12-20
+    Seller Name    : George, Casey and Harris
+    Client Name    : Stewart, Fields and Scott
+    Net Worth      : None
+    Total Amount   : 1036.58
+    Tax            : 103.66
+
+    GROUND TRUTH:
+    Invoice Number : 32830026
+    Invoice Date   : 2014-12-20
+    Seller Name    : George, Casey and Harris
+    Client Name    : Stewart, Fields and Scott
+    Net Worth      : 1036.58
+    Total Amount   : 1140.24
+    Tax            : 103.66
   ```
 * Parsed fields: `{}`
 * Failure type: **Table parsing fails completely** due to repeated numbers and missing delimiters.
@@ -172,17 +173,13 @@ Here’s a structured **failure analysis** for the `PytesseractInvoiceTextDetect
 * OCR output merges columns or reads text out of order.
 * Parsed fields incorrect or empty.
 
----
 
 ## **3. Patterns in failures**
 
 | Pattern                          | Observed effect                                                | Likely cause                                         |
 | -------------------------------- | -------------------------------------------------------------- | ---------------------------------------------------- |
-| **Small or thin text**           | Missing numbers, letters                                       | OCR resolution limit, small fonts                    |
 | **Complex tables**               | Garbled line items                                             | Tesseract cannot detect table structure reliably     |
 | **Non-standard fonts / symbols** | Misread characters (e.g., `O` vs `0`)                          | Font not covered by Tesseract language/training data |
-| **Low contrast / noisy images**  | Empty text                                                     | Poor preprocessing (thresholding, denoising)         |
 | **Domain shift**                 | Pipeline tuned on simple invoices fails on new templates       | Regex extraction too rigid                           |
-| **Class imbalance**              | Some fields like `tax` rarely appear → extraction metrics poor | Not enough labeled examples to tune regex heuristics |
 
 
