@@ -1,3 +1,4 @@
+from __future__ import annotations
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
@@ -1280,8 +1281,6 @@ class PytesseractInvoiceTextDetector:
 
             print("\n" + "=" * 100 + "\n")
 
-
-
 DEFAULT_FIELDS = [
     "invoice_number",
     "invoice_date",
@@ -1370,7 +1369,6 @@ def _field_outcome_counts(metrics_df, fields=DEFAULT_FIELDS):
         })
 
     return pd.DataFrame(rows).set_index("field")
-
 
 def create_analysis_dashboard(results, metrics_df=None, fields=DEFAULT_FIELDS, title="Invoice Processing Analysis Dashboard",
     save_path=None,show=True):
