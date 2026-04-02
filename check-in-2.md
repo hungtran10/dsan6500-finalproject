@@ -112,11 +112,77 @@ One of the most complex features is the `extract_table_dataframe` method, which 
 
 ## Drawbacks of the Layout-Aware Pipline
 
-* Layout/format inconsistencies: PyTesseract extracts raw text without semantic understanding. 
-Example: Fields like Net Worth or Total Amount may appear in different positions across extracted text. PyTesseract captures text but cannot reliably map them to structured labels.
-Pattern: Field misalignment and missing mappings cause systematic errors in field extraction.
+Here’s a structured **failure analysis** for the `PytesseractInvoiceTextDetector` pipeline based on the issues you encountered and the general behavior of Tesseract OCR on invoice datasets:
 
-* Failure on complex layouts: PyTesseract reads text linearly so it doesn’t handle multi-column or table structures natively. I addressed this by creating methods that extracted information from these visual structures.  
-Example: A table of line items with multiple columns (item, quantity, price) may get flattened, concatenated, or misaligned.
-Pattern: Structured fields like tables, headers, and footers break, especially when alignment is inconsistent or fonts vary.
+---
+
+## **1. What breaks and why**
+
+### **a) OCR Extraction Failure**
+
+* **Observation:** Many invoice images returned either empty text or garbled text with repeated numbers or letters (e.g., `"se se se..."` or `"19 19 19..."`).
+* **Reason:** Pytesseract is highly sensitive to image quality, noise, and layout complexity. Issues include:
+
+  * **Low resolution / blurred scans** – small or thin fonts may not be recognized.
+  * **Complex layouts** – multiple columns, tables, or unusual text alignment confuse the OCR engine.
+  * **Non-standard fonts** – decorative or stylized fonts reduce Tesseract accuracy.
+
+### **b) Field-level extraction failure**
+
+* **Observation:** Even when some text is extracted, structured fields like `invoice_number`, `total_amount`, `invoice_date` often remain empty.
+* **Reason:** The pipeline relies on post-processing heuristics (regex patterns, keyword matching) which fail when:
+
+  * The OCR output is noisy or partially recognized.
+  * The invoice deviates from expected formats.
+  * Numbers and symbols are misinterpreted (e.g., `0` → `O`, `1` → `I`, `.` → `,`).
+
+### **c) Confidence metrics are NaN**
+
+* **Observation:** In the pipeline’s summary DataFrame, `avg_confidence` is often NaN.
+* **Reason:** Pytesseract’s Python API does not always return word-level confidence, or parsing confidence fails for very short or malformed text outputs.
+
+---
+
+## **2. Concrete failure examples**
+
+### **Example 1: Garbled table**
+
+* Image contains an invoice table with line items.
+* OCR output:
+
+  ```
+  19 19 19 19 19 19 19 19 19 19 19 19 ...
+  ```
+* Parsed fields: `{}`
+* Failure type: **Table parsing fails completely** due to repeated numbers and missing delimiters.
+
+### **Example 2: Missing invoice number**
+
+* OCR output:
+
+  ```
+  Invoice: #O5932
+  ```
+* Parsed as: `{}` because regex expected digits (`\d+`), but OCR misread `0` as `O`.
+* Failure type: **Numeric misrecognition / small object OCR error**
+
+### **Example 3: Non-standard layouts**
+
+* Images with multiple columns or rotated text.
+* OCR output merges columns or reads text out of order.
+* Parsed fields incorrect or empty.
+
+---
+
+## **3. Patterns in failures**
+
+| Pattern                          | Observed effect                                                | Likely cause                                         |
+| -------------------------------- | -------------------------------------------------------------- | ---------------------------------------------------- |
+| **Small or thin text**           | Missing numbers, letters                                       | OCR resolution limit, small fonts                    |
+| **Complex tables**               | Garbled line items                                             | Tesseract cannot detect table structure reliably     |
+| **Non-standard fonts / symbols** | Misread characters (e.g., `O` vs `0`)                          | Font not covered by Tesseract language/training data |
+| **Low contrast / noisy images**  | Empty text                                                     | Poor preprocessing (thresholding, denoising)         |
+| **Domain shift**                 | Pipeline tuned on simple invoices fails on new templates       | Regex extraction too rigid                           |
+| **Class imbalance**              | Some fields like `tax` rarely appear → extraction metrics poor | Not enough labeled examples to tune regex heuristics |
+
 
