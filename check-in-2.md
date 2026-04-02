@@ -130,7 +130,7 @@ One of the most complex features is the `extract_table_dataframe` method, which 
 
 ## **2. Concrete failure examples**
 
-### **Example 1: Garbled table**
+### **Example 1: e**
 
 * Pipeline is unable to differentiate between Net Worth (Subtotal) and Total Amount
 * Output from a debugging step:
@@ -154,8 +154,6 @@ One of the most complex features is the `extract_table_dataframe` method, which 
     Total Amount   : 1140.24
     Tax            : 103.66
   ```
-* Parsed fields: `{}`
-* Failure type: **Table parsing fails completely** due to repeated numbers and missing delimiters.
 
 ### **Example 2: Missing invoice number**
 
