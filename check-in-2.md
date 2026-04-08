@@ -110,6 +110,14 @@ One of the most complex features is the `extract_table_dataframe` method, which 
 * **Recall:** 0.91185
 * **F1:** 0.94587
 
+## Drawbacks of the Zonal Pipeline
+
+The main obstacle has been that the pipeline is much better at locating and extracting clearly isolated text fields than it is at recovering the compact summary amounts at the bottom of the invoice. The current evaluation pattern is very telling: tax, total_amount, and net_worth have very low accuracy and recall, but high precision (80–100%). That means when the pipeline does predict one of those values, it is usually correct, but it is failing to find or parse most true instances. In other words, the problem is not over-prediction. It is under-detection caused by tight zones, OCR dropping text, and amount formatting that varies more than the simpler fields.
+
+We have already solved several earlier issues. First, we resolved method-definition bugs such as the clean_amount() TypeError by making helper functions static. Third, we improved field parsing for the easier regions: invoice number, date, vendor name, and client name now work because those fields are relatively isolated and the ROI text is usually clean enough to normalize. Those fixes showed that the overall zonal approach is viable, but also exposed where it breaks down.
+
+The current problems are concentrated in the bottom-right summary block. The amount fields are visually dense, often contain spacing artifacts such as "$ 5 640,17", and sometimes require the OCR to read across closely packed columns rather than a single clean line. Small ROI errors, thresholding effects, and the need to invert or pad the crop make these fields fragile. The pattern is consistent: top and middle text fields are stable; bottom summary amounts are brittle.
+
 ## Drawbacks of the Layout-Aware Pipline
 
 ## **1. What breaks and why**

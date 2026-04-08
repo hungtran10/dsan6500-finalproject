@@ -69,8 +69,7 @@ class InvoiceZonalOCRPipeline:
             r"-c tessedit_char_whitelist=0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz.,:-$€£¥₹()/[]% "
         )
 
-        # Relative ROIs: (x, y, w, h) in normalized coordinates [0,1].
-        # Tune these for your invoice template.
+        # Relative ROIs: (x, y, w, h) in normalized coordinates [0,1]
         self.template_zones = template_zones or {
             "default": {
             # Top-left: Invoice number
@@ -80,8 +79,8 @@ class InvoiceZonalOCRPipeline:
             "date": (0.48, 0.05, 0.30, 0.08),
 
             # Middle section
-            "vendor_name": (0.05, 0.215, 0.40, 0.02),   # Seller block (left)
-            "client_name": (0.50, 0.215, 0.40, 0.02),   # Client block (right)
+            "vendor_name": (0.05, 0.215, 0.40, 0.02),   # Seller block
+            "client_name": (0.50, 0.215, 0.40, 0.02),   # Client block
 
             # Bottom-right summary section
             "net_worth": (0.45, 0.79, 0.20, 0.12),      # Net worth
@@ -103,7 +102,6 @@ class InvoiceZonalOCRPipeline:
 
     
     # Preprocessing
-    
     def load_image(self, image_path: str) -> Optional[np.ndarray]:
         img = cv2.imread(str(image_path))
         return img
@@ -179,7 +177,6 @@ class InvoiceZonalOCRPipeline:
 
     
     # ROI extraction
-    
     def get_template_zones(self, template_name: str = "default") -> Dict[str, Tuple[float, float, float, float]]:
         return self.template_zones.get(template_name, self.template_zones["default"])
 
@@ -199,7 +196,7 @@ class InvoiceZonalOCRPipeline:
 
     def visualize_zones(self, image_path: str, template_name: str = "default") -> None:
         """
-        Draw the configured zones on top of the invoice so you can tune them.
+        Draw the configured zones on top of the invoice
         """
         img = self.load_image(image_path)
         if img is None:
@@ -232,7 +229,6 @@ class InvoiceZonalOCRPipeline:
 
     
     # OCR
-    
     def ocr_image(self, image: np.ndarray, psm: Optional[int] = None) -> str:
         """
         Run OCR using legacy Tesseract (OEM 0). Falls back to LSTM (OEM 1) if needed.
@@ -393,7 +389,10 @@ class InvoiceZonalOCRPipeline:
             roi = self.crop_relative_roi(cleaned, box, pad=pad)
 
             if field_name in ["net_worth", "tax", "total_amount"]:
-
+                # plt.imshow(roi, cmap='gray')
+                # plt.title(f"ROI - {field_name}")
+                # plt.axis('off')
+                # plt.show()
                 # try OCR on the crop as-is first, then retry with a larger crop if empty
                 psm = self.FIELD_PSM.get(field_name, 6)
                 text = self.ocr_roi(roi, field_name=field_name, psm=psm)
@@ -420,8 +419,6 @@ class InvoiceZonalOCRPipeline:
             "zone_text": zone_text,
             "fields": fields,
         }
-
-    
 
     def process_folder(self, folder_path, template_name="default", sample_size=None, sample_frac=None,
         random_state=42, file_extensions=("*.jpg", "*.png", "*.jpeg") ):
@@ -460,9 +457,7 @@ class InvoiceZonalOCRPipeline:
                 print("No images found.")
                 return pd.DataFrame()
 
-            # -------------------------
             # Sampling logic
-            # -------------------------
             random.seed(random_state)
 
             if sample_frac is not None:
@@ -475,9 +470,7 @@ class InvoiceZonalOCRPipeline:
 
             print(f"Processing {len(image_paths)} images...")
 
-            # -------------------------
             # Processing with tqdm
-            # -------------------------
             results = []
 
             for img_path in tqdm(image_paths, desc="Processing invoices"):
@@ -606,3 +599,65 @@ class InvoiceZonalOCRPipeline:
         metrics_df = pd.DataFrame(rows)
         print(metrics_df.to_string(index=False))
         return metrics_df
+    
+    def visualize_evaluation_metrics(self, metrics_df: pd.DataFrame) -> None:
+        """
+        Visualize field-level evaluation metrics.
+
+        Parameters
+        ----------
+        metrics_df : pd.DataFrame
+            Output of evaluate_against_ground_truth(). Must contain:
+            - field
+            - accuracy
+            - precision
+            - recall
+            - f1
+            - support
+        """
+        if metrics_df is None or metrics_df.empty:
+            print("No metrics to visualize.")
+            return
+
+        metrics_df = metrics_df.copy()
+
+        # Sort by accuracy for readability
+        metrics_df = metrics_df.sort_values("accuracy", ascending=False)
+
+        fig, axes = plt.subplots(1, 3, figsize=(20, 6))
+
+        # --- Plot 1: Accuracy ---
+        axes[0].bar(metrics_df["field"], metrics_df["accuracy"])
+        axes[0].set_title("Field-Level Accuracy")
+        axes[0].set_ylabel("Accuracy")
+        axes[0].set_ylim(0, 1)
+        axes[0].tick_params(axis="x", rotation=45)
+
+        for i, v in enumerate(metrics_df["accuracy"]):
+            axes[0].text(i, min(v + 0.02, 1.0), f"{v:.2f}", ha="center", fontsize=9)
+
+        # --- Plot 2: Precision / Recall / F1 ---
+        x = np.arange(len(metrics_df))
+        width = 0.25
+
+        axes[1].bar(x - width, metrics_df["precision"], width, label="Precision")
+        axes[1].bar(x, metrics_df["recall"], width, label="Recall")
+        axes[1].bar(x + width, metrics_df["f1"], width, label="F1")
+
+        axes[1].set_title("Precision / Recall / F1")
+        axes[1].set_ylim(0, 1)
+        axes[1].set_xticks(x)
+        axes[1].set_xticklabels(metrics_df["field"], rotation=45)
+        axes[1].legend()
+
+        # --- Plot 3: Support ---
+        axes[2].bar(metrics_df["field"], metrics_df["support"])
+        axes[2].set_title("Support by Field")
+        axes[2].set_ylabel("Count")
+        axes[2].tick_params(axis="x", rotation=45)
+
+        for i, v in enumerate(metrics_df["support"]):
+            axes[2].text(i, v + max(metrics_df["support"]) * 0.01, str(v), ha="center", fontsize=9)
+
+        plt.tight_layout()
+        plt.show()
