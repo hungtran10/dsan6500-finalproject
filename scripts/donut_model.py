@@ -1,9 +1,7 @@
 """Donut-based invoice extraction pipeline.
 
-This module replaces OCR-first extraction (e.g., Tesseract) with a Donut
-(Document Understanding Transformer) pipeline. It is designed to be adaptable
-for future document pipelines that return per-image result dictionaries and an
-optional evaluation dataframe.
+It is designed to be adaptable for future document pipelines that return per-image 
+result dictionaries and an optional evaluation dataframe.
 
 Primary outputs
 ---------------
@@ -48,7 +46,7 @@ import torch
 from transformers import DonutProcessor, VisionEncoderDecoderModel
 
 
-DEFAULT_FIELDS = [
+CANONICAL_INVOICE_FIELDS = [
     "invoice_number",
     "invoice_date",
     "seller_name",
@@ -86,9 +84,7 @@ class DonutInvoiceTextDetector:
         self.processor, self.model = self._load_model(self.config.model_name)
         self.full_results: List[Dict[str, Any]] = []
 
-    # ---------------------------------------------------------------------
     # Model loading / inference
-    # ---------------------------------------------------------------------
     def _resolve_device(self, device: Optional[str]) -> torch.device:
         """Resolve the device used for inference."""
         if device is not None:
@@ -130,6 +126,7 @@ class DonutInvoiceTextDetector:
             use_cache=True,
             bad_words_ids=[[self.processor.tokenizer.unk_token_id]],
             return_dict_in_generate=True,
+            output_scores=True,
         )
 
         if self.config.num_beams and self.config.num_beams > 1:
@@ -140,25 +137,13 @@ class DonutInvoiceTextDetector:
             gen_kwargs["no_repeat_ngram_size"] = self.config.no_repeat_ngram_size
 
         with torch.no_grad():
-            outputs = self.model.generate(
-                pixel_values=pixel_values,
-                decoder_input_ids=decoder_input_ids,
-                max_length=self.config.max_length,
-                pad_token_id=self.processor.tokenizer.pad_token_id,
-                eos_token_id=self.processor.tokenizer.eos_token_id,
-                use_cache=True,
-                bad_words_ids=[[self.processor.tokenizer.unk_token_id]],
-                return_dict_in_generate=True,
-                output_scores=True,   # add this
-            )
+            outputs = self.model.generate(**gen_kwargs)
 
-        # Donut docs show: batch_decode -> strip special tokens -> token2json.
         sequence = self.processor.batch_decode(outputs.sequences)[0]
         sequence = sequence.replace(self.processor.tokenizer.eos_token, "")
         sequence = sequence.replace(self.processor.tokenizer.pad_token, "")
         sequence = re.sub(r"<.*?>", "", sequence, count=1).strip()
 
-        # Compute a lightweight confidence proxy from generation scores when available.
         avg_confidence = self._sequence_confidence(outputs)
 
         return {
@@ -189,23 +174,25 @@ class DonutInvoiceTextDetector:
             return float("nan")
 
     def _parse_generated_text(self, generated_sequence: str) -> Dict[str, Any]:
-        """Parse Donut-generated text into a JSON-like dictionary."""
         cleaned = generated_sequence.strip()
-
-        # Remove common special tokens / task token prefix
         cleaned = cleaned.replace(self.processor.tokenizer.eos_token or "", "")
         cleaned = cleaned.replace(self.processor.tokenizer.pad_token or "", "")
-        cleaned = re.sub(r"<.*?>", "", cleaned, count=1).strip()
+        cleaned = re.sub(r"^<[^>]+>", "", cleaned).strip()
 
         try:
             parsed = self.processor.token2json(cleaned)
             if isinstance(parsed, dict):
+                # If token2json only gives a raw text blob, keep it as raw_text
+                if list(parsed.keys()) == ["text_sequence"]:
+                    return {"raw_text": parsed["text_sequence"]}
                 return parsed
-            return {"raw": parsed}
+            return {"raw_text": str(parsed)}
         except Exception:
             try:
                 parsed = json.loads(cleaned)
-                return parsed if isinstance(parsed, dict) else {"raw": parsed}
+                if isinstance(parsed, dict):
+                    return parsed
+                return {"raw_text": cleaned}
             except Exception:
                 return {"raw_text": cleaned}
 
@@ -221,9 +208,8 @@ class DonutInvoiceTextDetector:
         self.model.to(self.device)
         self.model.eval()
 
-    # ---------------------------------------------------------------------
+    
     # Field normalization / evaluation helpers
-    # ---------------------------------------------------------------------
     def _normalize_date(self, value: Any) -> Optional[str]:
         """Normalize a date-like value to YYYY-MM-DD."""
         if value is None or pd.isna(value):
@@ -284,9 +270,8 @@ class DonutInvoiceTextDetector:
 
         return re.sub(r"\s+", " ", s).lower()
 
-    # ---------------------------------------------------------------------
+    
     # Public extraction methods
-    # ---------------------------------------------------------------------
     def process_single_image(self, image_path: str | Path) -> Dict[str, Any]:
         """Run Donut inference on one invoice image and return a structured result."""
         result = {
@@ -309,6 +294,9 @@ class DonutInvoiceTextDetector:
             parsed = self._parse_generated_text(sequence)
 
             invoice_fields = self.extract_invoice_fields_from_json(parsed)
+            if not invoice_fields:
+                raw_text = parsed.get("raw_text", sequence) if isinstance(parsed, dict) else sequence
+                invoice_fields = self.extract_invoice_fields_from_text(raw_text)
             line_items_df = self.extract_line_items_from_json(parsed)
 
             result["extracted_text"] = sequence
@@ -331,42 +319,41 @@ class DonutInvoiceTextDetector:
 
         return result
 
-    def extract_invoice_fields_from_json(self, parsed: Dict[str, Any]) -> Dict[str, Any]:
-        """Map Donut output into a flat invoice field dictionary."""
-        fields: Dict[str, Any] = {}
+    def extract_invoice_fields_from_text(self, text: str) -> Dict[str, Any]:
+        """Fallback extraction from raw generated text."""
+        if not text:
+            return {}
 
-        # Support common Donut-style structures and custom invoice schemas.
-        candidate_sources = [parsed]
-        for key in ["invoice", "header", "subtotal", "total", "summary"]:
-            val = parsed.get(key)
-            if isinstance(val, dict):
-                candidate_sources.append(val)
-
-        # Direct lookups first.
-        lookup_keys = {
-            "invoice_number": ["invoice_number", "inv_no", "no", "id"],
-            "invoice_date": ["invoice_date", "date", "issue_date"],
-            "seller_name": ["seller_name", "vendor_name", "supplier_name"],
-            "client_name": ["client_name", "buyer_name", "customer_name"],
-            "tax": ["tax", "vat", "vat_amount"],
-            "net_worth": ["net_worth", "subtotal", "sub_total", "net_amount"],
-            "total_amount": ["total_amount", "total", "grand_total", "gross_worth"],
+        patterns = {
+            "invoice_number": [
+                r"(?:invoice\s*no\.?|invoice\s*number|no\.?)\s*[:#]?\s*([A-Za-z0-9\-\/]+)",
+            ],
+            "invoice_date": [
+                r"(?:invoice\s*date|date\s*of\s*issue|issue\s*date|date)\s*[:#]?\s*([0-9]{1,2}[\/\-.][0-9]{1,2}[\/\-.][0-9]{2,4})",
+            ],
+            "seller_name": [
+                r"(?:seller|vendor|supplier)\s*[:#]?\s*([A-Za-z0-9,&.\- ]+?)(?=\s+(?:client|buyer|customer|invoice|date|tax|total)|$)",
+            ],
+            "client_name": [
+                r"(?:client|buyer|customer)\s*[:#]?\s*([A-Za-z0-9,&.\- ]+?)(?=\s+(?:seller|invoice|date|tax|total)|$)",
+            ],
+            "tax": [
+                r"(?:tax|vat)\s*[:#]?\s*\$?([0-9,]+(?:\.[0-9]{2})?)",
+            ],
+            "net_worth": [
+                r"(?:net\s*worth|subtotal|net\s*amount)\s*[:#]?\s*\$?([0-9,]+(?:\.[0-9]{2})?)",
+            ],
+            "total_amount": [
+                r"(?:total\s*amount|grand\s*total|total)\s*[:#]?\s*\$?([0-9,]+(?:\.[0-9]{2})?)",
+            ],
         }
 
-        for out_key, key_variants in lookup_keys.items():
-            found = None
-            for src in candidate_sources:
-                for k in key_variants:
-                    if k in src and src[k] not in [None, "", {}]:
-                        found = src[k]
-                        break
-                if found is not None:
-                    break
+        fields = {}
+        for field, pats in patterns.items():
+            val = self._first_match(text, pats)
+            if val is not None:
+                fields[field] = val
 
-            if found is not None:
-                fields[out_key] = found
-
-        # Normalize canonical fields.
         if "invoice_date" in fields:
             norm = self._normalize_date(fields["invoice_date"])
             if norm is not None:
@@ -378,8 +365,100 @@ class DonutInvoiceTextDetector:
                 if norm is not None:
                     fields[money_field] = norm
 
-        # If the parsed output contains a line_items-like list, keep it for table export.
-        return fields
+        return {field: fields[field] for field in CANONICAL_INVOICE_FIELDS if field in fields}
+
+
+    def extract_invoice_fields_from_json(self, parsed: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Extract canonical invoice fields from parsed Donut output.
+
+        Handles:
+        - Structured JSON (ideal Donut output)
+        - Nested payloads (invoice/header/summary/etc.)
+        - Raw text fallback when structure is missing
+        """
+
+        if not isinstance(parsed, dict):
+            return {}
+
+        
+        # 1. RAW TEXT FALLBACK
+        # If parser only returned text, use regex extraction
+        if "raw_text" in parsed:
+            return self.extract_invoice_fields_from_text(parsed["raw_text"])
+
+        
+        # 2. BUILD CANDIDATE SOURCES
+        candidate_sources = []
+
+        # Top-level
+        candidate_sources.append(parsed)
+
+        # Common nested structures
+        for key in ["invoice", "header", "summary", "total", "subtotal"]:
+            val = parsed.get(key)
+            if isinstance(val, dict):
+                candidate_sources.append(val)
+
+        
+        # 3. FIELD LOOKUP MAP
+        lookup_keys = {
+            "invoice_number": ["invoice_number", "inv_no", "no", "id"],
+            "invoice_date": ["invoice_date", "date", "issue_date"],
+            "seller_name": ["seller_name", "vendor_name", "supplier_name"],
+            "client_name": ["client_name", "buyer_name", "customer_name"],
+            "tax": ["tax", "vat", "vat_amount"],
+            "net_worth": ["net_worth", "subtotal", "sub_total", "net_amount"],
+            "total_amount": ["total_amount", "total", "grand_total", "gross_worth"],
+        }
+
+        
+        # 4. EXTRACT FIELDS
+        fields: Dict[str, Any] = {}
+
+        for field in CANONICAL_INVOICE_FIELDS:
+            found = None
+
+            for src in candidate_sources:
+                for key in lookup_keys[field]:
+                    if key in src:
+                        val = src[key]
+                        if val not in [None, "", {}]:
+                            found = val
+                            break
+                if found is not None:
+                    break
+
+            if found is not None:
+                fields[field] = found
+
+        
+        # 5. FALLBACK: TRY TEXT SEQUENCE
+        # Sometimes Donut returns: {"text_sequence": "..."}
+        if not fields and "text_sequence" in parsed:
+            return self.extract_invoice_fields_from_text(parsed["text_sequence"])
+
+        
+        # 6. NORMALIZATION
+        if "invoice_date" in fields:
+            norm = self._normalize_date(fields["invoice_date"])
+            if norm is not None:
+                fields["invoice_date"] = norm
+
+        for money_field in ["tax", "net_worth", "total_amount"]:
+            if money_field in fields:
+                norm = self._normalize_money(fields[money_field])
+                if norm is not None:
+                    fields[money_field] = norm
+
+        # 7. ENFORCE CANONICAL ORDER
+        ordered_fields = {
+            field: fields[field]
+            for field in CANONICAL_INVOICE_FIELDS
+            if field in fields
+        }
+
+        return ordered_fields
 
     def extract_line_items_from_json(self, parsed: Dict[str, Any]) -> pd.DataFrame:
         """Convert Donut line-item output into a DataFrame when available."""
@@ -399,6 +478,7 @@ class DonutInvoiceTextDetector:
         save_word_level: bool = False,
         sample_frac: Optional[float] = None,
         random_state: int = 42,
+        image_path_col: str = "original_path",
     ) -> pd.DataFrame:
         """Process a dataset of images and save aggregated Donut outputs."""
         successful_images = processed_images_df[processed_images_df["status"] == "success"].copy()
@@ -416,7 +496,7 @@ class DonutInvoiceTextDetector:
         for start in range(0, len(successful_images), batch_size):
             batch_df = successful_images.iloc[start : start + batch_size]
             for _, row in batch_df.iterrows():
-                path = row["processed_path"]
+                path = row[image_path_col]
                 if not path or not Path(path).exists():
                     continue
 
@@ -508,12 +588,11 @@ class DonutInvoiceTextDetector:
             pred_count = int(valid_pred.sum())
             correct_count = int(correct.sum())
 
-            accuracy = correct_count / gt_count if gt_count else np.nan
+            field_recall = correct_count / gt_count if gt_count else np.nan
             precision = correct_count / pred_count if pred_count else np.nan
-            recall = correct_count / gt_count if gt_count else np.nan
             f1 = (
-                2 * precision * recall / (precision + recall)
-                if pd.notna(precision) and pd.notna(recall) and (precision + recall) > 0
+                2 * precision * field_recall / (precision + field_recall)
+                if pd.notna(precision) and pd.notna(field_recall) and (precision + field_recall) > 0
                 else np.nan
             )
 
@@ -522,20 +601,24 @@ class DonutInvoiceTextDetector:
                 "ground_truth_count": gt_count,
                 "predicted_count": pred_count,
                 "correct": correct_count,
-                "accuracy": accuracy,
+                "field_recall": field_recall,
                 "precision": precision,
-                "recall": recall,
                 "f1": f1,
             })
 
         metrics_df = pd.DataFrame(results)
 
         if metrics_df.empty:
-            raise ValueError(
-                "No fields were evaluated. Check that ground_truth_df contains the expected "
-                "label columns: invoice_number, invoice_date, seller_name, client_name, net_worth, "
-                "total_amount, tax."
+            print(
+                "WARNING: No fields were evaluated. This usually means the model extracted no fields "
+                "or the prediction/ground-truth keys did not align."
             )
+            return pd.DataFrame(columns=["field", "ground_truth_count", "predicted_count", "correct", "field_recall", "precision", "f1"]), {
+                "accuracy": np.nan,
+                "precision": np.nan,
+                "recall": np.nan,
+                "f1": np.nan,
+            }
         
         total_gt = metrics_df["ground_truth_count"].sum() if not metrics_df.empty else 0
         total_pred = metrics_df["predicted_count"].sum() if not metrics_df.empty else 0
@@ -554,9 +637,8 @@ class DonutInvoiceTextDetector:
 
         return metrics_df, overall
 
-    # ---------------------------------------------------------------------
+    
     # Summary / sample inspection
-    # ---------------------------------------------------------------------
     def _print_summary(self, results: List[Dict[str, Any]]) -> None:
         """Print a concise summary of Donut extraction results."""
         successful = [r for r in results if r.get("success")]
@@ -608,10 +690,7 @@ class DonutInvoiceTextDetector:
                 print(f"  {seq[:250]}{'...' if len(seq) > 250 else ''}")
 
 
-# -------------------------------------------------------------------------
 # Standalone analysis dashboard functions (pipeline-agnostic)
-# -------------------------------------------------------------------------
-
 def _get_successful_results(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return [r for r in results if r.get("success")]
 
@@ -633,16 +712,14 @@ def _field_extraction_rates(results: List[Dict[str, Any]], fields: Sequence[str]
     return rates
 
 
-def _field_accuracies(metrics_df: Optional[pd.DataFrame], fields: Sequence[str]) -> Dict[str, float]:
+def _field_recalls(metrics_df: Optional[pd.DataFrame], fields: Sequence[str]) -> Dict[str, float]:
     if metrics_df is None or metrics_df.empty:
         return {f: np.nan for f in fields}
 
-    df = metrics_df.copy()
-    df = df.set_index("field")
-
+    df = metrics_df.copy().set_index("field")
     acc = {}
     for field in fields:
-        acc[field] = float(df.loc[field, "accuracy"]) if field in df.index else np.nan
+        acc[field] = float(df.loc[field, "field_recall"]) if field in df.index and "field_recall" in df.columns else np.nan
     return acc
 
 
@@ -675,7 +752,7 @@ def _field_outcome_counts(metrics_df: Optional[pd.DataFrame], fields: Sequence[s
 def create_analysis_dashboard(
     results: List[Dict[str, Any]],
     metrics_df: Optional[pd.DataFrame] = None,
-    fields: Sequence[str] = DEFAULT_FIELDS,
+    fields: Sequence[str] = CANONICAL_INVOICE_FIELDS,
     title: str = "Invoice Processing Analysis Dashboard",
     save_path: Optional[str | Path] = None,
     show: bool = True,
@@ -702,7 +779,7 @@ def create_analysis_dashboard(
     -------
     dict
         Summary statistics including total_processed, successful, failed,
-        field_extraction_rates, field_accuracies, avg_confidence, and avg_words.
+        field_extraction_rates, field_recalls, avg_confidence, and avg_words.
     """
     successful = _get_successful_results(results)
     failed = [r for r in results if not r.get("success")]
@@ -726,7 +803,7 @@ def create_analysis_dashboard(
     avg_confidence = float(np.nanmean(confidences))
 
     rates = _field_extraction_rates(results, fields=fields)
-    acc = _field_accuracies(metrics_df, fields=fields)
+    acc = _field_recalls(metrics_df, fields=fields)
     outcome_df = _field_outcome_counts(metrics_df, fields=fields)
 
     print(f"\nFIELD EXTRACTION SUCCESS RATES")
@@ -735,7 +812,7 @@ def create_analysis_dashboard(
         print(f"  {field:15}: {rates[field]*100:5.1f}%")
 
     if metrics_df is not None and not metrics_df.empty:
-        print(f"\nFIELD-LEVEL EXACT MATCH ACCURACIES")
+        print(f"\nFIELD-LEVEL RECALLS")
         print(f"{'='*50}")
         for field in fields:
             if pd.notna(acc.get(field, np.nan)):
@@ -816,7 +893,7 @@ def create_analysis_dashboard(
         "successful": len(successful),
         "failed": len(failed),
         "field_extraction_rates": rates,
-        "field_accuracies": acc,
+        "field_recalls": acc,
         "avg_confidence": avg_confidence,
         "avg_words": avg_words,
     }
