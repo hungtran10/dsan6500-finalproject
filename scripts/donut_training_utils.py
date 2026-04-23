@@ -36,7 +36,9 @@ from transformers import (
     Seq2SeqTrainer,
     Seq2SeqTrainingArguments,
     VisionEncoderDecoderModel,
+    GenerationConfig
 )
+from transformers.models.bart.modeling_bart import shift_tokens_right
 
 
 CANONICAL_INVOICE_FIELDS = [
@@ -49,16 +51,14 @@ CANONICAL_INVOICE_FIELDS = [
     "total_amount",
 ]
 
-
 @dataclass
 class DonutFineTuningConfig:
-    """Configuration for invoice-only Donut fine-tuning."""
-
     model_name: str = "naver-clova-ix/donut-base-finetuned-cord-v2"
     task_prompt_invoice: str = "<s_invoice>"
-    max_length_invoice: int = 512
+    label_max_length: int = 128
+    generation_max_new_tokens: int = 64
     num_train_epochs: int = 15
-    learning_rate: float = 3e-5
+    learning_rate: float = 2e-5
     weight_decay: float = 0.01
     warmup_ratio: float = 0.05
     early_stopping_patience: int = 3
@@ -251,7 +251,7 @@ def build_canonical_invoice_payload(row: pd.Series | Dict[str, Any]) -> Dict[str
 # Training-frame builder
 def build_donut_pretraining_frame(
     ground_truth_df: pd.DataFrame,
-    image_col: str = "processed_path",
+    image_col: str = "original_path",
     sample_frac: Optional[float] = None,
     random_state: int = 42,
     augment_factor: int = 1,
@@ -299,19 +299,9 @@ def build_donut_pretraining_frame(
 
     return pd.DataFrame(rows)
 
-
-# Dataset / collator / trainer
 def augment_document_image(image: Image.Image) -> Image.Image:
-    """Apply conservative document-safe augmentation."""
-    if random.random() < 0.5:
-        angle = random.uniform(-1.5, 1.5)
-        image = image.rotate(angle, resample=Image.Resampling.BICUBIC, fillcolor=(255, 255, 255))
-    if random.random() < 0.5:
-        image = ImageEnhance.Brightness(image).enhance(random.uniform(0.95, 1.05))
-    if random.random() < 0.5:
-        image = ImageEnhance.Contrast(image).enhance(random.uniform(0.95, 1.08))
+    """No-op augmentation for the first original-image Donut run."""
     return image
-
 
 class DonutInvoiceDataset(torch.utils.data.Dataset):
     """PyTorch dataset for invoice-only Donut fine-tuning examples."""
@@ -328,6 +318,7 @@ class DonutInvoiceDataset(torch.utils.data.Dataset):
     def __getitem__(self, idx):
         row = self.df.iloc[idx]
         image = Image.open(row["image_path"]).convert("RGB")
+        #image.thumbnail((960, 960), Image.Resampling.LANCZOS)
 
         if self.augment:
             image = augment_document_image(image)
@@ -366,28 +357,29 @@ class WeightedDonutTrainer(Seq2SeqTrainer):
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         loss_weight = inputs.pop("loss_weight", None)
+        pixel_values = inputs.pop("pixel_values")
         labels = inputs.pop("labels")
 
-        outputs = model(**inputs)
-        logits = outputs.logits
+        outputs = model(
+            pixel_values=pixel_values,
+            labels=labels,
+            return_dict=True,
+        )
 
-        shift_logits = logits[:, :-1, :].contiguous()
-        shift_labels = labels[:, 1:].contiguous()
-
-        loss_fct = torch.nn.CrossEntropyLoss(ignore_index=-100, reduction="none")
-        token_loss = loss_fct(
-            shift_logits.view(-1, shift_logits.size(-1)),
-            shift_labels.view(-1),
-        ).view(shift_labels.size())
-
-        valid_tokens = (shift_labels != -100).float()
-        sample_loss = (token_loss * valid_tokens).sum(dim=1) / valid_tokens.sum(dim=1).clamp(min=1.0)
+        loss = outputs.loss
 
         if loss_weight is not None:
-            sample_loss = sample_loss * loss_weight.to(sample_loss.device)
+            loss = loss * loss_weight.to(loss.device).mean()
 
-        loss = sample_loss.mean()
         return (loss, outputs) if return_outputs else loss
+    
+    def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys=None):
+        inputs = inputs.copy()
+
+        # Remove loss_weight before generate()
+        inputs.pop("loss_weight", None)
+
+        return super().prediction_step(model, inputs, prediction_loss_only, ignore_keys)
 
 
 # Validation metrics
@@ -407,113 +399,157 @@ def build_donut_compute_metrics(processor: DonutProcessor):
         label_payloads = [flatten_invoice_payload(safe_json_loads(t)) for t in label_texts]
 
         exact_matches = []
-        field_scores = {k: [] for k in CANONICAL_INVOICE_FIELDS}
+        parse_hits = 0
+
+        stats = {
+            field: {"correct": 0, "pred": 0, "gt": 0}
+            for field in CANONICAL_INVOICE_FIELDS
+        }
 
         for pred, ref in zip(pred_payloads, label_payloads):
             exact_matches.append(int(pred == ref))
-            for k in CANONICAL_INVOICE_FIELDS:
-                if k in ref or k in pred:
-                    field_scores[k].append(int(pred.get(k) == ref.get(k)))
+
+            # parse_rate: did we get at least one real field?
+            if any(pred.get(field) not in [None, ""] for field in CANONICAL_INVOICE_FIELDS):
+                parse_hits += 1
+
+            for field in CANONICAL_INVOICE_FIELDS:
+                pred_val = pred.get(field)
+                ref_val = ref.get(field)
+
+                pred_present = pred_val not in [None, ""]
+                ref_present = ref_val not in [None, ""]
+
+                if pred_present:
+                    stats[field]["pred"] += 1
+                if ref_present:
+                    stats[field]["gt"] += 1
+                if pred_present and ref_present and pred_val == ref_val:
+                    stats[field]["correct"] += 1
 
         metrics = {
             "exact_match": float(np.mean(exact_matches)) if exact_matches else 0.0,
+            "parse_rate": parse_hits / len(pred_payloads) if pred_payloads else 0.0,
         }
-        for k, vals in field_scores.items():
-            metrics[f"{k}_acc"] = float(np.mean(vals)) if vals else np.nan
+
+        for field, s in stats.items():
+            accuracy = s["correct"] / len(pred_payloads) if pred_payloads else np.nan
+            precision = s["correct"] / s["pred"] if s["pred"] else np.nan
+            recall = s["correct"] / s["gt"] if s["gt"] else np.nan
+
+            metrics[f"{field}_accuracy"] = accuracy
+            metrics[f"{field}_precision"] = precision
+            metrics[f"{field}_recall"] = recall
+
         return metrics
 
     return compute_metrics
 
-
-
 # Training entry point
 def train_donut_invoice_model(
-    ground_truth_df: pd.DataFrame,
-    output_dir: str | Path = "./donut_model",
-    config: Optional[DonutFineTuningConfig] = None,
-    image_col: str = "processed_path",
-    sample_frac: Optional[float] = None,
-    random_state: int = 42,
-    val_size: float = 0.1,
-    test_size: float = 0.1,
-    augment_factor: int = 1,
-):
+        train_df: pd.DataFrame,
+        val_df: pd.DataFrame,
+        test_df: pd.DataFrame,
+        output_dir: str | Path = "./donut_model",
+        config: Optional[DonutFineTuningConfig] = None,
+        image_col: str = "original_path",
+        augment_factor: int = 1,
+    ):
     """Fine-tune a Donut model on invoice data."""
     config = config or DonutFineTuningConfig()
     device = resolve_donut_device(config.device)
     train_bs, eval_bs, grad_accum = recommend_donut_batch_sizes(device, config.model_name)
 
-    df = ground_truth_df.copy()
-    if sample_frac is not None:
-        df = df.sample(frac=sample_frac, random_state=random_state).reset_index(drop=True)
-
-    if len(df) < 3:
-        raise ValueError("Need at least 3 rows to create train/val/test splits.")
-
-    train_df, temp_df = train_test_split(df, test_size=(val_size + test_size), random_state=random_state)
-    relative_test = test_size / (val_size + test_size)
-    val_df, test_df = train_test_split(temp_df, test_size=relative_test, random_state=random_state)
-
     processor = DonutProcessor.from_pretrained(config.model_name)
     model = VisionEncoderDecoderModel.from_pretrained(config.model_name)
     model.to(device)
 
-    model.config.pad_token_id = processor.tokenizer.pad_token_id
-    model.config.eos_token_id = processor.tokenizer.eos_token_id
-    model.config.decoder_start_token_id = processor.tokenizer.bos_token_id
+    tokenizer = processor.tokenizer
+
+    tokenizer.model_max_length = config.label_max_length
+
+    # model side 
+    model.config.pad_token_id = tokenizer.pad_token_id 
+    model.config.eos_token_id = tokenizer.eos_token_id 
+    model.config.decoder_start_token_id = tokenizer.bos_token_id
+
+    # generation side: fresh config, no inherited max_length=20
+    model.generation_config = GenerationConfig(
+        pad_token_id=tokenizer.pad_token_id,
+        eos_token_id=tokenizer.eos_token_id,
+        decoder_start_token_id=tokenizer.bos_token_id,
+        max_new_tokens=config.generation_max_new_tokens,
+        num_beams=1,
+        do_sample=False,
+    )
+    
+    model.config.use_cache = False
+    model.config.is_encoder_decoder = True
+
+    if hasattr(model, "decoder") and hasattr(model.decoder, "config"):
+        model.decoder.config.use_cache = False
 
     train_frame = build_donut_pretraining_frame(
         train_df,
         image_col=image_col,
-        augment_factor=augment_factor,
-        random_state=random_state,
+        augment_factor=augment_factor
     )
     val_frame = build_donut_pretraining_frame(
         val_df,
         image_col=image_col,
-        augment_factor=1,
-        random_state=random_state,
+        augment_factor=1
     )
     test_frame = build_donut_pretraining_frame(
         test_df,
         image_col=image_col,
-        augment_factor=1,
-        random_state=random_state,
+        augment_factor=1
     )
 
-    max_length = config.max_length_invoice
+    # labels
+    max_length = config.label_max_length
     train_dataset = DonutInvoiceDataset(train_frame, processor, max_length=max_length, augment=True)
     val_dataset = DonutInvoiceDataset(val_frame, processor, max_length=max_length, augment=False)
     test_dataset = DonutInvoiceDataset(test_frame, processor, max_length=max_length, augment=False)
+
+    # generation
+    model.generation_config.max_new_tokens = config.generation_max_new_tokens
 
     compute_metrics = build_donut_compute_metrics(processor)
 
     fp16 = device.type == "cuda"
     bf16 = False
 
+    total_steps = (
+        len(train_dataset) // (train_bs * grad_accum)
+    ) * config.num_train_epochs
+
+    warmup_steps = int(0.05 * total_steps)
+
     training_args = Seq2SeqTrainingArguments(
         output_dir=str(output_dir),
-        per_device_train_batch_size=train_bs,
-        per_device_eval_batch_size=eval_bs,
-        gradient_accumulation_steps=grad_accum,
-        num_train_epochs=config.num_train_epochs,
+        per_device_train_batch_size=1,
+        per_device_eval_batch_size=1,
+        gradient_accumulation_steps=1,
+        num_train_epochs=min(config.num_train_epochs, 5),
         learning_rate=config.learning_rate,
         weight_decay=config.weight_decay,
-        warmup_ratio=config.warmup_ratio,
-        evaluation_strategy="epoch",
-        save_strategy="epoch",
+        warmup_steps=warmup_steps,
+
+        eval_strategy="no",
+        save_strategy="no",
+
         logging_strategy="steps",
         logging_steps=25,
+
         predict_with_generate=True,
-        generation_max_length=max_length,
-        load_best_model_at_end=True,
-        metric_for_best_model="exact_match",
-        greater_is_better=True,
+        generation_max_length=None,
         remove_unused_columns=False,
+        disable_tqdm=True,
         report_to="none",
-        save_total_limit=2,
-        fp16=fp16,
-        bf16=bf16,
+
+        fp16=False,
+        bf16=False,
+
         dataloader_num_workers=0 if device.type == "mps" else 2,
         eval_accumulation_steps=1 if device.type == "mps" else 4,
     )
@@ -524,9 +560,8 @@ def train_donut_invoice_model(
         train_dataset=train_dataset,
         eval_dataset=val_dataset,
         data_collator=DonutDataCollator(),
-        tokenizer=processor.tokenizer,
+        processing_class=processor,
         compute_metrics=compute_metrics,
-        callbacks=[EarlyStoppingCallback(early_stopping_patience=config.early_stopping_patience)],
     )
 
     trainer.train()
@@ -556,13 +591,3 @@ def train_donut_invoice_model(
         },
     }
 
-# Usage notes
-
-# 1) Invoice-only fine-tuning:
-#    train_donut_invoice_model(ground_truth_df, task_mode="invoice", augment_factor=2)
-#
-# 2) Table-only fine-tuning (requires line-item labels):
-#    train_donut_invoice_model(ground_truth_df, task_mode="table", include_table_task=True)
-#
-# 3) Multi-task fine-tuning:
-#    train_donut_invoice_model(ground_truth_df, task_mode="multi", include_table_task=True)
