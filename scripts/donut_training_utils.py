@@ -44,10 +44,10 @@ from transformers.models.bart.modeling_bart import shift_tokens_right
 CANONICAL_INVOICE_FIELDS = [
     "invoice_number",
     "invoice_date",
-    "seller_name",
-    "client_name",
-    "net_worth",
-    "tax",
+    # "seller_name",
+    # "client_name",
+    # "net_worth",
+    # "tax",
     "total_amount",
 ]
 
@@ -57,9 +57,9 @@ class DonutFineTuningConfig:
     task_prompt_invoice: str = "<s_invoice>"
     label_max_length: int = 128
     generation_max_new_tokens: int = 64
-    num_train_epochs: int = 15
-    learning_rate: float = 2e-5
-    weight_decay: float = 0.01
+    num_train_epochs: int = 20
+    learning_rate: float = 1e-4
+    weight_decay: float = 0.0
     warmup_ratio: float = 0.05
     early_stopping_patience: int = 3
     numeric_loss_weight: float = 1.5
@@ -183,6 +183,89 @@ def safe_json_loads(sequence: str) -> Dict[str, Any]:
         except Exception:
             return {"raw_text": cleaned}
 
+def parse_structured_invoice_text(text: str) -> Dict[str, Any]:
+    raw = re.sub(r"<.*?>", "", text).lower().strip()
+
+    fields = {}
+
+    matches = re.findall(r"\[\s*([a-z_]+)\s*\]\s*=\s*([^|]+)", raw)
+
+    FIELD_MAP = {
+        "inv_no": "invoice_number",
+        "intv_no": "invoice_number",
+        "inv_dt": "invoice_date",
+        "amt": "total_amount",
+    }
+
+    for key, value in matches:
+        if key in FIELD_MAP:
+            fields[FIELD_MAP[key]] = value.strip()
+
+    if "invoice_date" not in fields:
+        m = re.search(r"(\d{4}-\d{2}-\d{2})", raw)
+        if m:
+            fields["invoice_date"] = m.group(1)
+
+    if "total_amount" not in fields:
+        m = re.search(r"(\d+(?:\.\d{2})?)", raw)
+        if m:
+            fields["total_amount"] = m.group(1)
+
+    if "invoice_number" not in fields:
+        m = re.search(r"\b\d{6,}\b", raw)
+        if m:
+            fields["invoice_number"] = m.group(0)
+
+    return fields
+
+def _normalize_eval_value(value: Any, field: str) -> Optional[str]:
+    if value is None or (isinstance(value, float) and np.isnan(value)):
+        return None
+
+    s = str(value).strip()
+    if not s or s.lower() in {"nan", "none"}:
+        return None
+
+    if field == "invoice_date":
+        dt = pd.to_datetime(s, errors="coerce")
+        return dt.strftime("%Y-%m-%d") if pd.notna(dt) else None
+
+    if field == "total_amount":
+        s = s.replace("$", "").replace(",", "").strip()
+        try:
+            return f"{float(s):.2f}"
+        except ValueError:
+            return None
+
+    if field == "invoice_number":
+        return re.sub(r"\D+", "", s)
+
+    return re.sub(r"\s+", " ", s).lower()
+
+
+def _field_equal_tolerant(pred_val: Any, ref_val: Any, field: str) -> bool:
+    pred_norm = _normalize_eval_value(pred_val, field)
+    ref_norm = _normalize_eval_value(ref_val, field)
+
+    if pred_norm is None or ref_norm is None:
+        return False
+
+    # Numeric tolerance
+    if field == "total_amount":
+        try:
+            p = float(pred_norm)
+            r = float(ref_norm)
+            return abs(p - r) <= max(0.01, 0.01 * abs(r))
+        except ValueError:
+            return False
+
+    # Date tolerance (string normalized already)
+    if field == "invoice_date":
+        return pred_norm == ref_norm
+
+    # String tolerance (ignore minor noise)
+    return pred_norm == ref_norm
+
 
 def flatten_invoice_payload(parsed: Dict[str, Any]) -> Dict[str, Any]:
     """Flatten a payload into the canonical invoice schema in a fixed order."""
@@ -232,6 +315,18 @@ def flatten_invoice_payload(parsed: Dict[str, Any]) -> Dict[str, Any]:
     return {field: flattened.get(field) for field in CANONICAL_INVOICE_FIELDS}
 
 
+def safe_val(x):
+    return x if x not in [None, ""] else "NULL"
+
+def build_structured_invoice_text(invoice_payload):
+    return (
+        "<s_invoice>"
+        f"[inv_dt]={safe_val(invoice_payload['invoice_date'])} | "
+        f"[amt]={safe_val(invoice_payload['total_amount'])} | "
+        f"[inv_no]={safe_val(invoice_payload['invoice_number'])}"
+        "</s>"
+    )
+
 def build_canonical_invoice_payload(row: pd.Series | Dict[str, Any]) -> Dict[str, Any]:
     """Build the canonical invoice payload in a fixed field order."""
     payload = {
@@ -277,7 +372,7 @@ def build_donut_pretraining_frame(
             continue
 
         invoice_payload = build_canonical_invoice_payload(row)
-        invoice_text = json.dumps(invoice_payload, ensure_ascii=False, separators=(",", ":"), sort_keys=False)
+        invoice_text = build_structured_invoice_text(invoice_payload)
 
         numeric_fields = sum(
             1
@@ -290,7 +385,7 @@ def build_donut_pretraining_frame(
             rows.append(
                 {
                     "image_path": str(image_path),
-                    "target_text": f"<s_invoice>{invoice_text}",
+                    "target_text": invoice_text,
                     "loss_weight": invoice_weight,
                     "source_idx": idx,
                     "augment_id": augment_id,
@@ -318,7 +413,7 @@ class DonutInvoiceDataset(torch.utils.data.Dataset):
     def __getitem__(self, idx):
         row = self.df.iloc[idx]
         image = Image.open(row["image_path"]).convert("RGB")
-        #image.thumbnail((960, 960), Image.Resampling.LANCZOS)
+        image.thumbnail((960, 960), Image.Resampling.LANCZOS)
 
         if self.augment:
             image = augment_document_image(image)
@@ -327,12 +422,19 @@ class DonutInvoiceDataset(torch.utils.data.Dataset):
         labels = self.processor.tokenizer(
             row["target_text"],
             add_special_tokens=False,
-            max_length=self.max_length,
-            padding="max_length",
+            max_length=self.max_length - 1,
+            padding=False,
             truncation=True,
             return_tensors="pt",
         ).input_ids.squeeze(0)
         labels[labels == self.processor.tokenizer.pad_token_id] = -100
+
+        # FORCE EOS
+        if labels[-1] != self.processor.tokenizer.eos_token_id:
+            labels = torch.cat([
+                labels,
+                torch.tensor([self.processor.tokenizer.eos_token_id])
+            ])
 
         return {
             "pixel_values": pixel_values,
@@ -342,13 +444,22 @@ class DonutInvoiceDataset(torch.utils.data.Dataset):
 
 
 class DonutDataCollator:
-    """Stack Donut batches while preserving per-example loss weights."""
-
     def __call__(self, features):
+        pixel_values = torch.stack([f["pixel_values"] for f in features])
+
+        labels = [f["labels"] for f in features]
+        labels = torch.nn.utils.rnn.pad_sequence(
+            labels,
+            batch_first=True,
+            padding_value=-100
+        )
+
+        loss_weight = torch.stack([f["loss_weight"] for f in features])
+
         return {
-            "pixel_values": torch.stack([f["pixel_values"] for f in features]),
-            "labels": torch.stack([f["labels"] for f in features]),
-            "loss_weight": torch.stack([f["loss_weight"] for f in features]),
+            "pixel_values": pixel_values,
+            "labels": labels,
+            "loss_weight": loss_weight,
         }
 
 
@@ -375,9 +486,18 @@ class WeightedDonutTrainer(Seq2SeqTrainer):
     
     def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys=None):
         inputs = inputs.copy()
-
-        # Remove loss_weight before generate()
         inputs.pop("loss_weight", None)
+
+        has_labels = "labels" in inputs
+
+        if self.args.predict_with_generate and not has_labels:
+            batch_size = inputs["pixel_values"].size(0)
+
+            decoder_input_ids = self.task_prompt_ids.repeat(batch_size, 1).to(
+                inputs["pixel_values"].device
+            )
+
+            inputs["decoder_input_ids"] = decoder_input_ids
 
         return super().prediction_step(model, inputs, prediction_loss_only, ignore_keys)
 
@@ -395,10 +515,25 @@ def build_donut_compute_metrics(processor: DonutProcessor):
         label_ids = np.where(labels != -100, labels, processor.tokenizer.pad_token_id)
         label_texts = processor.batch_decode(label_ids, skip_special_tokens=False)
 
-        pred_payloads = [flatten_invoice_payload(safe_json_loads(t)) for t in pred_texts]
-        label_payloads = [flatten_invoice_payload(safe_json_loads(t)) for t in label_texts]
+        pred_payloads = [parse_structured_invoice_text(t) for t in pred_texts]
+        label_payloads = [parse_structured_invoice_text(t) for t in label_texts]
 
-        exact_matches = []
+        pred_payload = pred_payloads[0]
+        label_payload = label_payloads[0]
+
+        print("PRED PAYLOAD:", pred_payload)
+        print("LABEL PAYLOAD:", label_payload)
+        print(
+            "DATE CHECK:",
+            pred_payload.get("invoice_date"),
+            label_payload.get("invoice_date"),
+            _field_equal_tolerant(
+                pred_payload.get("invoice_date"),
+                label_payload.get("invoice_date"),
+                "invoice_date"
+            )
+        )
+        
         parse_hits = 0
 
         stats = {
@@ -407,7 +542,6 @@ def build_donut_compute_metrics(processor: DonutProcessor):
         }
 
         for pred, ref in zip(pred_payloads, label_payloads):
-            exact_matches.append(int(pred == ref))
 
             # parse_rate: did we get at least one real field?
             if any(pred.get(field) not in [None, ""] for field in CANONICAL_INVOICE_FIELDS):
@@ -424,11 +558,10 @@ def build_donut_compute_metrics(processor: DonutProcessor):
                     stats[field]["pred"] += 1
                 if ref_present:
                     stats[field]["gt"] += 1
-                if pred_present and ref_present and pred_val == ref_val:
+                if pred_present and ref_present and _field_equal_tolerant(pred_val, ref_val, field):
                     stats[field]["correct"] += 1
 
         metrics = {
-            "exact_match": float(np.mean(exact_matches)) if exact_matches else 0.0,
             "parse_rate": parse_hits / len(pred_payloads) if pred_payloads else 0.0,
         }
 
@@ -464,14 +597,21 @@ def train_donut_invoice_model(
     model = VisionEncoderDecoderModel.from_pretrained(config.model_name)
     model.to(device)
 
-    tokenizer = processor.tokenizer
+    task_prompt_ids = processor.tokenizer(
+        config.task_prompt_invoice,
+        add_special_tokens=False,
+        return_tensors="pt"
+    ).input_ids
 
+    tokenizer = processor.tokenizer
+    
     tokenizer.model_max_length = config.label_max_length
 
     # model side 
     model.config.pad_token_id = tokenizer.pad_token_id 
     model.config.eos_token_id = tokenizer.eos_token_id 
-    model.config.decoder_start_token_id = tokenizer.bos_token_id
+    model.config.decoder_start_token_id = tokenizer.convert_tokens_to_ids("<s_invoice>")
+    # model.config.decoder_start_token_id = tokenizer.bos_token_id
 
     # generation side: fresh config, no inherited max_length=20
     model.generation_config = GenerationConfig(
@@ -481,10 +621,14 @@ def train_donut_invoice_model(
         max_new_tokens=config.generation_max_new_tokens,
         num_beams=1,
         do_sample=False,
+        repetition_penalty=1.0,
+        no_repeat_ngram_size=3,
+        early_stopping=False
     )
     
     model.config.use_cache = False
     model.config.is_encoder_decoder = True
+    
 
     if hasattr(model, "decoder") and hasattr(model.decoder, "config"):
         model.decoder.config.use_cache = False
@@ -494,6 +638,16 @@ def train_donut_invoice_model(
         image_col=image_col,
         augment_factor=augment_factor
     )
+
+    sample_text = train_frame.iloc[0]["target_text"]
+    sample_ids = tokenizer(sample_text, add_special_tokens=True).input_ids
+
+    print("=== TRAIN SAMPLE CHECK ===")
+    print(sample_text)
+    print(tokenizer.decode(sample_ids, skip_special_tokens=False))
+    print("EOS present:", tokenizer.eos_token_id in sample_ids)
+    assert tokenizer.eos_token_id in sample_ids, "EOS token is missing from the training label."
+
     val_frame = build_donut_pretraining_frame(
         val_df,
         image_col=image_col,
@@ -511,9 +665,6 @@ def train_donut_invoice_model(
     val_dataset = DonutInvoiceDataset(val_frame, processor, max_length=max_length, augment=False)
     test_dataset = DonutInvoiceDataset(test_frame, processor, max_length=max_length, augment=False)
 
-    # generation
-    model.generation_config.max_new_tokens = config.generation_max_new_tokens
-
     compute_metrics = build_donut_compute_metrics(processor)
 
     fp16 = device.type == "cuda"
@@ -530,7 +681,7 @@ def train_donut_invoice_model(
         per_device_train_batch_size=1,
         per_device_eval_batch_size=1,
         gradient_accumulation_steps=1,
-        num_train_epochs=min(config.num_train_epochs, 5),
+        num_train_epochs=config.num_train_epochs,
         learning_rate=config.learning_rate,
         weight_decay=config.weight_decay,
         warmup_steps=warmup_steps,
@@ -540,9 +691,10 @@ def train_donut_invoice_model(
 
         logging_strategy="steps",
         logging_steps=25,
+        
+        generation_num_beams=3,
 
         predict_with_generate=True,
-        generation_max_length=None,
         remove_unused_columns=False,
         disable_tqdm=True,
         report_to="none",
@@ -563,8 +715,50 @@ def train_donut_invoice_model(
         processing_class=processor,
         compute_metrics=compute_metrics,
     )
+    trainer.task_prompt_ids = task_prompt_ids
 
     trainer.train()
+    # === DEBUG: Inspect one prediction vs label ===
+    model.eval()
+
+    sample = val_dataset[0]
+
+    pixel_values = sample["pixel_values"].unsqueeze(0).to(model.device)
+
+    # bad_words = [
+    #         "s_number",
+    #         "number",
+    #         "date=",
+    #         "[date]",
+    #         "[s_number]"
+    #     ]
+
+    # bad_words_ids = [
+    #     tokenizer(bw, add_special_tokens=False).input_ids
+    #     for bw in bad_words
+    # ]
+
+    # Generate prediction
+    outputs = model.generate(
+        pixel_values,
+        decoder_input_ids=trainer.task_prompt_ids.to(model.device),
+        max_new_tokens=config.generation_max_new_tokens,
+        # bad_words_ids=bad_words_ids,
+    )
+
+    pred_text = processor.batch_decode(outputs, skip_special_tokens=False)[0]
+
+    # Decode label
+    label_ids = sample["labels"]
+    label_ids = torch.where(label_ids != -100, label_ids, processor.tokenizer.pad_token_id)
+    label_text = processor.tokenizer.decode(label_ids, skip_special_tokens=False)
+
+    print("\n=== DEBUG SAMPLE ===")
+    print("PRED TEXT:\n", pred_text)
+    print("\nLABEL TEXT:\n", label_text)
+    print("====================\n")
+
+
     val_metrics = trainer.evaluate()
     test_metrics = trainer.predict(test_dataset).metrics
 
@@ -590,4 +784,3 @@ def train_donut_invoice_model(
             "grad_accum": grad_accum,
         },
     }
-

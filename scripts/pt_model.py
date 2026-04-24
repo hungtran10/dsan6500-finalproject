@@ -14,6 +14,9 @@ import warnings
 
 warnings.filterwarnings('ignore')
 
+from .eval_utils import evaluate_exact_match
+from .visualize_util import create_analysis_dashboard, visualize_sample_results
+
 class PytesseractInvoiceTextDetector:
     """
     Text detection and OCR extraction for preprocessed invoice images
@@ -815,7 +818,8 @@ class PytesseractInvoiceTextDetector:
             processed_images_df["status"] == "success"
         ]
         """
-        Process a dataset of preprocessed invoice images and save aggregated OCR outputs.
+        Process a dataset of preprocessed invoice images, extracts fields, and save aggregated OCR outputs.
+        Creates the predictions later used by evaluate_against_ground_truth()
 
         Parameters
         ----------
@@ -980,32 +984,6 @@ class PytesseractInvoiceTextDetector:
             ground_truth_df = ground_truth_df[ground_truth_df[merge_key].astype(str).isin(overlap_keys)].copy()
             pred_df = pred_df[pred_df[merge_key].astype(str).isin(overlap_keys)].copy()
 
-        merged = ground_truth_df.merge(
-            pred_df,
-            on=merge_key,
-            how="inner",
-            suffixes=("_gt", "_pred")
-        )
-
-        def normalize(val, field):
-            if pd.isna(val):
-                return np.nan
-
-            s = str(val).strip()
-            if s.lower() in ["", "nan", "none"]:
-                return np.nan
-
-            if field in ["total_amount", "tax", "net_worth"]:
-                norm = self._normalize_money(s)
-                return norm if norm is not None else np.nan
-
-            if field == "invoice_date":
-                norm = self._normalize_date(s)
-                return norm if norm is not None else np.nan
-
-            s = re.sub(r"\s+", " ", s)
-            return s.lower()
-
         fields = [
             "invoice_number",
             "invoice_date",
@@ -1015,63 +993,13 @@ class PytesseractInvoiceTextDetector:
             "total_amount",
             "tax"
         ]
-
-        results = []
-
-        for field in fields:
-            gt_col = f"{field}_gt"
-            pred_col = f"{field}_pred"
-
-            if gt_col not in merged.columns:
-                continue
-
-            gt = merged[gt_col].apply(lambda x: normalize(x, field))
-            pred = merged[pred_col].apply(lambda x: normalize(x, field))
-
-            valid_gt = gt.notna()
-            valid_pred = pred.notna()
-            correct = (gt == pred) & valid_gt & valid_pred
-
-            gt_count = int(valid_gt.sum())
-            pred_count = int(valid_pred.sum())
-            correct_count = int(correct.sum())
-
-            accuracy = correct_count / gt_count if gt_count else np.nan
-            precision = correct_count / pred_count if pred_count else np.nan
-            recall = correct_count / gt_count if gt_count else np.nan
-            f1 = (
-                2 * precision * recall / (precision + recall)
-                if pd.notna(precision) and pd.notna(recall) and (precision + recall) > 0
-                else np.nan
-            )
-
-            results.append({
-                "field": field,
-                "ground_truth_count": gt_count,
-                "predicted_count": pred_count,
-                "correct": correct_count,
-                "accuracy": accuracy,
-                "precision": precision,
-                "recall": recall,
-                "f1": f1
-            })
-
-        metrics_df = pd.DataFrame(results)
-
-        total_gt = metrics_df["ground_truth_count"].sum()
-        total_pred = metrics_df["predicted_count"].sum()
-        total_correct = metrics_df["correct"].sum()
-
-        overall = {
-            "accuracy": total_correct / total_gt if total_gt else np.nan,
-            "precision": total_correct / total_pred if total_pred else np.nan,
-            "recall": total_correct / total_gt if total_gt else np.nan,
-            "f1": (
-                2 * (total_correct / total_pred) * (total_correct / total_gt)
-                / ((total_correct / total_pred) + (total_correct / total_gt))
-                if total_pred and total_gt else np.nan
-            )
-        }
+        metrics_df, overall = evaluate_exact_match(
+            ground_truth_df=ground_truth_df,
+            pred_df=pred_df,
+            fields=fields,
+            merge_key=merge_key,
+            restrict_to_matched=restrict_to_matched,
+        )
 
         return metrics_df, overall
     
@@ -1369,171 +1297,3 @@ def _field_outcome_counts(metrics_df, fields=DEFAULT_FIELDS):
         })
 
     return pd.DataFrame(rows).set_index("field")
-
-def create_analysis_dashboard(results, metrics_df=None, fields=DEFAULT_FIELDS, title="Invoice Processing Analysis Dashboard",
-    save_path=None,show=True):
-    """
-    Standalone dashboard function.
-    Works with any pipeline that returns:
-      - results: list[dict] with keys like success, total_words, avg_confidence, invoice_fields
-      - metrics_df: optional evaluation dataframe from evaluate_against_ground_truth()
-    """
-    successful = _get_successful_results(results)
-    failed = [r for r in results if not r.get("success")]
-
-    print(f"\n{'='*80}")
-    print(title)
-    print(f"{'='*80}")
-
-    print(f"\nPROCESSING OVERVIEW")
-    print(f"{'='*50}")
-    print(f"Total images processed: {len(results):,}")
-    print(f"Successful extractions: {len(successful):,} ({(len(successful)/len(results)*100 if results else 0):.1f}%)")
-    print(f"Failed extractions: {len(failed):,} ({(len(failed)/len(results)*100 if results else 0):.1f}%)")
-
-    if not successful:
-        print("No successful results to analyze.")
-        return None
-
-    word_counts = [r.get("total_words", 0) for r in successful]
-    confidences = [r.get("avg_confidence", 0) for r in successful]
-
-    rates = _field_extraction_rates(results, fields=fields)
-    acc = _field_accuracies(metrics_df, fields=fields) if metrics_df is not None else {f: np.nan for f in fields}
-    outcome_df = _field_outcome_counts(metrics_df, fields=fields)
-
-    print(f"\nOCR QUALITY METRICS")
-    print(f"{'='*50}")
-    print(f"Average words per invoice: {np.mean(word_counts):.1f}")
-    print(f"Median words per invoice: {np.median(word_counts):.0f}")
-    print(f"Word count range: {min(word_counts)} - {max(word_counts)}")
-    print(f"Average OCR confidence: {np.mean(confidences):.1f}%")
-    print(f"Median OCR confidence: {np.median(confidences):.1f}%")
-    print(f"Confidence range: {min(confidences):.1f}% - {max(confidences):.1f}%")
-
-    print(f"\nFIELD EXTRACTION SUCCESS RATES")
-    print(f"{'='*50}")
-    for field in fields:
-        print(f"  {field:15}: {rates[field]*100:5.1f}%")
-
-    if metrics_df is not None and not metrics_df.empty:
-        print(f"\nFIELD-LEVEL EXACT MATCH ACCURACIES")
-        print(f"{'='*50}")
-        for field in fields:
-            if pd.notna(acc[field]):
-                print(f"  {field:15}: {acc[field]*100:5.1f}%")
-
-    fig, axes = plt.subplots(2, 2, figsize=(16, 14))
-    fig.suptitle(title, fontsize=16, fontweight="bold")
-
-    # 1) OCR confidence distribution
-    axes[0, 0].hist(confidences, bins=20, alpha=0.8, edgecolor="black")
-    axes[0, 0].set_title("OCR Confidence Distribution")
-    axes[0, 0].set_xlabel("Confidence (%)")
-    axes[0, 0].set_ylabel("Frequency")
-    axes[0, 0].axvline(np.mean(confidences), linestyle="--", label=f"Mean: {np.mean(confidences):.1f}%")
-    axes[0, 0].legend()
-
-    # 2) Accuracy for the requested fields
-    if metrics_df is not None and not metrics_df.empty:
-        acc_vals = [acc[field] for field in fields]
-        bars = axes[0, 1].bar(range(len(fields)), acc_vals, alpha=0.85, edgecolor="black")
-        axes[0, 1].set_title("Field-Level Exact Match Accuracy")
-        axes[0, 1].set_ylabel("Accuracy")
-        axes[0, 1].set_xticks(range(len(fields)))
-        axes[0, 1].set_xticklabels(fields, rotation=45, ha="right")
-        axes[0, 1].set_ylim(0, 1.05)
-
-        for bar, v in zip(bars, acc_vals):
-            if pd.notna(v):
-                axes[0, 1].text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.02, f"{v*100:.1f}%",
-                                ha="center", va="bottom", fontsize=9)
-    else:
-        axes[0, 1].text(0.5, 0.5, "No evaluation metrics\na vailable", ha="center", va="center",
-                        transform=axes[0, 1].transAxes, fontsize=12)
-        axes[0, 1].set_title("Field-Level Exact Match Accuracy")
-
-    # 3) Field extraction success rates
-    rates_vals = [rates[field] * 100 for field in fields]
-    bars = axes[1, 0].bar(range(len(fields)), rates_vals, alpha=0.85, edgecolor="black")
-    axes[1, 0].set_title("Field Extraction Success Rates")
-    axes[1, 0].set_ylabel("Success Rate (%)")
-    axes[1, 0].set_xticks(range(len(fields)))
-    axes[1, 0].set_xticklabels(fields, rotation=45, ha="right")
-    axes[1, 0].set_ylim(0, 105)
-
-    for bar, v in zip(bars, rates_vals):
-        axes[1, 0].text(bar.get_x() + bar.get_width()/2, bar.get_height() + 1,
-                        f"{v:.1f}%", ha="center", va="bottom", fontsize=9)
-
-    # 4) Stacked outcome breakdown
-    if metrics_df is not None and not metrics_df.empty:
-        x = np.arange(len(fields))
-        correct = outcome_df.loc[fields, "correct"].values
-        incorrect = outcome_df.loc[fields, "incorrect"].values
-        missing_pred = outcome_df.loc[fields, "missing_pred"].values
-
-        axes[1, 1].bar(x, correct, label="Correct", alpha=0.85, edgecolor="black")
-        axes[1, 1].bar(x, incorrect, bottom=correct, label="Incorrect", alpha=0.85, edgecolor="black")
-        axes[1, 1].bar(x, missing_pred, bottom=correct + incorrect, label="Missing prediction", alpha=0.85, edgecolor="black")
-
-        axes[1, 1].set_title("Prediction Outcome Breakdown")
-        axes[1, 1].set_ylabel("Count")
-        axes[1, 1].set_xticks(x)
-        axes[1, 1].set_xticklabels(fields, rotation=45, ha="right")
-        axes[1, 1].legend()
-    else:
-        axes[1, 1].text(0.5, 0.5, "No evaluation metrics\navailable", ha="center", va="center",
-                        transform=axes[1, 1].transAxes, fontsize=12)
-        axes[1, 1].set_title("Prediction Outcome Breakdown")
-
-    plt.tight_layout()
-
-    if save_path is not None:
-        plt.savefig(save_path, dpi=200, bbox_inches="tight")
-
-    if show:
-        plt.show()
-    else:
-        plt.close(fig)
-
-    return {
-        "total_processed": len(results),
-        "successful": len(successful),
-        "failed": len(failed),
-        "field_extraction_rates": rates,
-        "field_accuracies": acc,
-        "avg_confidence": float(np.mean(confidences)),
-        "avg_words": float(np.mean(word_counts)),
-    }
-
-
-def visualize_sample_results(results, visualize_text_fn=None, n_samples=3, title="Sample OCR Results"):
-    """
-    Standalone sample visualizer.
-    `visualize_text_fn` should be a callable like:
-        visualize_text_fn(image_path, result_dict)
-    """
-    successful = _get_successful_results(results)[:n_samples]
-
-    for i, result in enumerate(successful, start=1):
-        print(f"\n{'='*60}")
-        print(f"Sample {i}: {result.get('filename', 'unknown')}")
-        print(f"{'='*60}")
-
-        print(f"Total words detected: {result.get('total_words', 0)}")
-        print(f"Average confidence: {result.get('avg_confidence', 0):.1f}%")
-
-        invoice_fields = result.get("invoice_fields", {})
-        if invoice_fields:
-            print("\nExtracted Invoice Fields:")
-            for field, value in invoice_fields.items():
-                print(f"  {field}: {value}")
-
-        if result.get("extracted_text"):
-            sample_text = " ".join([item["text"] for item in result["extracted_text"][:10]])
-            print(f"\nSample extracted text (first 10 words):")
-            print(f"  {sample_text}...")
-
-        if visualize_text_fn is not None and result.get("image_path") and Path(result["image_path"]).exists():
-            visualize_text_fn(result["image_path"], result)
