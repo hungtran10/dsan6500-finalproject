@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Callable, Iterable
+from typing import Any, Callable, Iterable
 
 import numpy as np
 import pandas as pd
@@ -188,4 +188,58 @@ def evaluate_exact_match(
     )
 
     return metrics_df, overall.as_dict()
+
+
+def summarize_field_prediction_gaps(
+    *,
+    ground_truth_df: pd.DataFrame,
+    pred_df: pd.DataFrame,
+    fields: Iterable[str],
+    merge_key: str = "processed_file",
+    field_normalizer_factory: Callable[[str], Callable[[object], object]] = default_field_normalizer,
+    max_examples: int = 8,
+) -> pd.DataFrame:
+    """
+    For each field, count rows where GT is non-empty but prediction is missing (normalized).
+
+    Use this to separate "wrong string" errors from empty predictions when accuracy drops.
+    """
+    merged = ground_truth_df.merge(
+        pred_df,
+        on=merge_key,
+        how="inner",
+        suffixes=("_gt", "_pred"),
+    )
+    rows_out: list[dict[str, Any]] = []
+
+    for field in fields:
+        gt_col = f"{field}_gt"
+        pred_col = f"{field}_pred"
+        if gt_col not in merged.columns:
+            continue
+
+        norm = field_normalizer_factory(field)
+        gt = merged[gt_col].apply(norm)
+        pred = merged[pred_col].apply(norm) if pred_col in merged.columns else pd.Series([np.nan] * len(merged))
+
+        valid_gt = gt.notna()
+        missing_pred = valid_gt & pred.isna()
+        mismatch = valid_gt & pred.notna() & (gt != pred)
+
+        gap_idx = merged.index[missing_pred]
+        sample_keys: list[str] = []
+        for ix in gap_idx[:max_examples]:
+            sample_keys.append(str(merged.loc[ix, merge_key]))
+
+        rows_out.append(
+            {
+                "field": field,
+                "gt_nonempty": int(valid_gt.sum()),
+                "pred_missing_given_gt": int(missing_pred.sum()),
+                "mismatch_given_both": int(mismatch.sum()),
+                "sample_keys_missing_pred": sample_keys,
+            }
+        )
+
+    return pd.DataFrame(rows_out)
 

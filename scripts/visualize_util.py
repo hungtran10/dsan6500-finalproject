@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Literal, Optional, Sequence
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -50,6 +50,53 @@ def _field_metrics(metrics_df: Optional[pd.DataFrame], fields: Sequence[str], me
     return out
 
 
+def _flatten_layoutlm_token_confidences(results: List[Dict[str, Any]]) -> List[float]:
+    vals: List[float] = []
+    for r in _get_successful_results(results):
+        wc = r.get("word_token_confidences")
+        if isinstance(wc, list) and wc:
+            vals.extend(float(x) for x in wc if pd.notna(x))
+    return vals
+
+
+def _flatten_ocr_token_confidences(results: List[Dict[str, Any]]) -> List[float]:
+    """Per-word OCR confidences; normalized to ~[0, 1] if Tesseract used 0–100 scale."""
+    vals: List[float] = []
+    for r in _get_successful_results(results):
+        et = r.get("extracted_text")
+        if not isinstance(et, list):
+            continue
+        for item in et:
+            c = item.get("confidence") if isinstance(item, dict) else None
+            if c is not None and pd.notna(c):
+                vals.append(float(c))
+    if vals and max(vals) > 1.5:
+        vals = [v / 100.0 for v in vals]
+    return vals
+
+
+def _resolve_top_left_panel_kind(
+    panel_model: Literal["ocr", "layoutlm", "auto"],
+    results: List[Dict[str, Any]],
+) -> Literal["layoutlm_tokens", "ocr_tokens", "ocr_doc_avg"]:
+    if panel_model == "layoutlm":
+        if _flatten_layoutlm_token_confidences(results):
+            return "layoutlm_tokens"
+        if _flatten_ocr_token_confidences(results):
+            return "ocr_tokens"
+        return "ocr_doc_avg"
+    if panel_model == "ocr":
+        if _flatten_ocr_token_confidences(results):
+            return "ocr_tokens"
+        return "ocr_doc_avg"
+    # auto
+    if _flatten_layoutlm_token_confidences(results):
+        return "layoutlm_tokens"
+    if _flatten_ocr_token_confidences(results):
+        return "ocr_tokens"
+    return "ocr_doc_avg"
+
+
 def _field_outcome_counts(metrics_df: Optional[pd.DataFrame], fields: Sequence[str]) -> pd.DataFrame:
     if metrics_df is None or metrics_df.empty:
         return pd.DataFrame(index=fields, columns=["correct", "incorrect", "missing_pred"]).fillna(0)
@@ -84,6 +131,8 @@ def create_analysis_dashboard(
     title: str = "Invoice Processing Analysis Dashboard",
     save_path: Optional[str | Path] = None,
     show: bool = True,
+    *,
+    panel_model: Literal["ocr", "layoutlm", "auto"] = "auto",
 ) -> Dict[str, Any]:
     successful = _get_successful_results(results)
     failed = [r for r in results if not r.get("success")]
@@ -105,6 +154,10 @@ def create_analysis_dashboard(
     confidences = [r.get("avg_confidence", np.nan) for r in successful]
     valid_confidences = [c for c in confidences if pd.notna(c)]
 
+    top_left_kind = _resolve_top_left_panel_kind(panel_model, results)
+    layoutlm_tok = _flatten_layoutlm_token_confidences(results)
+    ocr_tok = _flatten_ocr_token_confidences(results)
+
     rates = _field_extraction_rates(results, fields=fields)
     accuracy = _field_metrics(metrics_df, fields, "accuracy")
     precision = _field_metrics(metrics_df, fields, "precision")
@@ -122,17 +175,39 @@ def create_analysis_dashboard(
     fig, axes = plt.subplots(2, 2, figsize=(16, 12))
     fig.suptitle(title, fontsize=16, fontweight="bold")
 
-    # 1) Confidence distribution
-    if valid_confidences:
+    # 1) Top-left: token-level confidence (model-dependent via ``panel_model``)
+    if top_left_kind == "layoutlm_tokens" and layoutlm_tok:
+        axes[0, 0].hist(layoutlm_tok, bins=30, alpha=0.8, edgecolor="black", range=(0, 1))
+        axes[0, 0].set_title("Token-level confidence (LayoutLM)")
+        axes[0, 0].set_xlabel("Mean max-softmax confidence per OCR word")
+        axes[0, 0].set_ylabel("Frequency")
+        axes[0, 0].axvline(np.mean(layoutlm_tok), linestyle="--", color="orange", label=f"Mean: {np.mean(layoutlm_tok):.3f}")
+        axes[0, 0].legend()
+    elif top_left_kind == "ocr_tokens" and ocr_tok:
+        axes[0, 0].hist(ocr_tok, bins=30, alpha=0.8, edgecolor="black", range=(0, 1))
+        axes[0, 0].set_title("Token-level confidence (OCR)")
+        axes[0, 0].set_xlabel("Per-word OCR confidence (normalized)")
+        axes[0, 0].set_ylabel("Frequency")
+        axes[0, 0].axvline(np.mean(ocr_tok), linestyle="--", color="orange", label=f"Mean: {np.mean(ocr_tok):.3f}")
+        axes[0, 0].legend()
+    elif valid_confidences:
         axes[0, 0].hist(valid_confidences, bins=20, alpha=0.8, edgecolor="black")
-        axes[0, 0].set_title("Confidence Distribution")
+        axes[0, 0].set_title("Avg OCR confidence per document")
         axes[0, 0].set_xlabel("Confidence")
         axes[0, 0].set_ylabel("Frequency")
         axes[0, 0].axvline(np.mean(valid_confidences), linestyle="--", label=f"Mean: {np.mean(valid_confidences):.3f}")
         axes[0, 0].legend()
     else:
-        axes[0, 0].text(0.5, 0.5, "No confidence scores\navailable", ha="center", va="center", transform=axes[0, 0].transAxes, fontsize=12)
-        axes[0, 0].set_title("Confidence Distribution")
+        axes[0, 0].text(
+            0.5,
+            0.5,
+            "No confidence scores\navailable for this panel_model",
+            ha="center",
+            va="center",
+            transform=axes[0, 0].transAxes,
+            fontsize=11,
+        )
+        axes[0, 0].set_title("Confidence (no data)")
 
     # 2) Accuracy per field
     if metrics_df is not None and not metrics_df.empty:
@@ -187,7 +262,7 @@ def create_analysis_dashboard(
     else:
         plt.close(fig)
 
-    return {
+    out_stats: Dict[str, Any] = {
         "total_processed": len(results),
         "successful": len(successful),
         "failed": len(failed),
@@ -197,7 +272,14 @@ def create_analysis_dashboard(
         "field_precisions": precision,
         "avg_confidence": float(np.nanmean(confidences)),
         "avg_words": float(np.mean(word_counts)),
+        "panel_model_requested": panel_model,
+        "top_left_panel_kind": top_left_kind,
     }
+    if layoutlm_tok:
+        out_stats["mean_layoutlm_token_confidence"] = float(np.mean(layoutlm_tok))
+    if ocr_tok:
+        out_stats["mean_ocr_token_confidence"] = float(np.mean(ocr_tok))
+    return out_stats
 
 
 def visualize_sample_results(

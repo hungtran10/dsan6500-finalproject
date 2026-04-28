@@ -22,9 +22,11 @@ class PytesseractInvoiceTextDetector:
     Text detection and OCR extraction for preprocessed invoice images
     """
 
-    def __init__(self, output_dir):
+    def __init__(self, output_dir, debug_totals=False):
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.debug_totals = bool(debug_totals)
+        self._last_bottom_totals_debug = None
         self.tesseract_config = r'--oem 3 --psm 6 -c tessedit_char_whitelist=0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz.,:-$€£¥₹()[] '
 
     def assign_regions(self, extracted_text, image_shape):
@@ -202,7 +204,282 @@ class PytesseractInvoiceTextDetector:
                 lines[-1]["words"].append(item)
 
         return lines
-    
+
+    def _dedupe_ocr_words(self, words):
+        """Drop duplicate word records (same text + top-left bbox)."""
+        seen = set()
+        out = []
+        for w in words:
+            x, y, _, _ = w["bbox"]
+            key = (int(x), int(y), w.get("text", ""))
+            if key not in seen:
+                seen.add(key)
+                out.append(w)
+        return out
+
+    def _expand_bottom_region_words(self, image_shape, bottom_words, extracted_text):
+        """
+        Merge strict bottom-region words with words from the lower page band.
+
+        Summary lines sometimes sit just above the geometric bottom cut used by
+        assign_regions; including a lower band reduces missing tax/total fields.
+        """
+        h = int(image_shape[0])
+        band_y = int(0.82 * h)
+        extra = [w for w in extracted_text if w["bbox"][1] >= band_y]
+        return self._dedupe_ocr_words(list(bottom_words) + extra)
+
+    def _summary_arithmetic_tol(self, total: float) -> float:
+        """Absolute tolerance for tax + net ≈ total (handles OCR drift on large amounts)."""
+        t = float(total)
+        return max(0.015 * t, 0.75, 1.0)
+
+    def _assign_summary_from_amounts(self, amounts):
+        """
+        Map a multiset of money floats to tax / net_worth / total_amount.
+
+        Prefer triplets (tax, net, total) with tax + net ≈ total within tolerance.
+        Falls back to sorted min / mid / max when no arithmetic-consistent triplet exists.
+        """
+        arr = []
+        for x in amounts:
+            try:
+                v = float(x)
+            except (TypeError, ValueError):
+                continue
+            if v == v and v >= 0:  # not NaN, non-negative money
+                arr.append(v)
+        if len(arr) < 2:
+            return {}
+
+        def try_arithmetic_triplet(value_pool):
+            """value_pool: iterable of distinct candidates (sorted descending helps)."""
+            pool = sorted(set(value_pool), reverse=True)
+            if len(pool) < 2:
+                return None
+            best = None
+            best_err = float("inf")
+            best_c = -1.0
+            for c in pool:
+                tol = self._summary_arithmetic_tol(c)
+                for a in pool:
+                    for b in pool:
+                        if a > c + tol or b > c + tol:
+                            continue
+                        err = abs(a + b - c)
+                        if err <= tol:
+                            if err < best_err - 1e-9 or (abs(err - best_err) < 1e-9 and c > best_c):
+                                best_err = err
+                                best_c = c
+                                tax, net = (a, b) if a <= b else (b, a)
+                                best = (tax, net, c)
+            if best:
+                tax, net, tot = best
+                return {
+                    "tax": f"{tax:.2f}",
+                    "net_worth": f"{net:.2f}",
+                    "total_amount": f"{tot:.2f}",
+                }
+            return None
+
+        # 1) Arithmetic on full unique set
+        r = try_arithmetic_triplet(arr)
+        if r:
+            return r
+
+        # 2) If many spurious table amounts leaked in, retry on a pruned pool
+        u = sorted(set(arr))
+        if len(u) > 15:
+            small = u[: min(5, len(u))]
+            large = u[-10:]
+            pruned = sorted(set(small + large))
+            r = try_arithmetic_triplet(pruned)
+            if r:
+                return r
+
+        # 3) Legacy sorted assignment (old behavior)
+        u = sorted(set(arr))
+        if len(u) >= 3:
+            return {
+                "tax": f"{u[0]:.2f}",
+                "net_worth": f"{u[1]:.2f}",
+                "total_amount": f"{u[-1]:.2f}",
+            }
+        if len(u) == 2:
+            return {
+                "tax": f"{u[0]:.2f}",
+                "total_amount": f"{u[1]:.2f}",
+            }
+        return {}
+
+    def _normalize_money_line_whitespace(self, txt: str) -> str:
+        """Normalize unicode spaces that break regex \\s and money tokenization."""
+        if not txt:
+            return ""
+        for ch in ("\u00a0", "\u202f", "\u2009", "\u2007"):
+            txt = txt.replace(ch, " ")
+        return txt
+
+    def _parse_money_tokens_from_text(self, txt: str) -> list[float]:
+        """
+        Parse monetary floats from one OCR line.
+
+        Handles European thousands with spaces (e.g. ``6 579,11``), compact ``657,91``,
+        and the legacy flexible pattern used before.
+        """
+        t = self._normalize_money_line_whitespace(txt)
+        amounts: list[float] = []
+        seen: set[float] = set()
+        patterns = [
+            # European: 6 579,11 or 1 140,24 (thousands groups separated by spaces)
+            re.compile(r"(?<![\d,])(\d{1,3}(?:\s\d{3})+,\d{2})(?![\d])"),
+            # Flexible (legacy): digits / spaces / comma / dot then cents
+            re.compile(r"(?<!\w)(\d[\d\s.,]*[.,]\d{2})(?!\w)"),
+            # Compact: 657,91 (avoid matching inside larger match where possible via order)
+            re.compile(r"(?<!\d)(\d+,\d{2})(?!\d)"),
+        ]
+        for pat in patterns:
+            for m in pat.finditer(t):
+                raw = m.group(0)
+                norm = self._normalize_money(raw)
+                if norm is None:
+                    continue
+                v = float(norm)
+                if v not in seen:
+                    seen.add(v)
+                    amounts.append(v)
+        return amounts
+
+    def _extract_bottom_totals_core(self, bottom_words):
+        """
+        Internal: extract tax / net_worth / total_amount plus debug trace.
+        """
+        debug: dict = {"lines": [], "candidates": [], "path": None, "result": {}}
+
+        if not bottom_words:
+            return {}, debug
+
+        lines = self._cluster_words_by_line(bottom_words)
+        line_texts = []
+        for line in lines:
+            txt = " ".join(w["text"] for w in sorted(line["words"], key=lambda x: x["bbox"][0]))
+            line_texts.append((txt, line["words"]))
+
+        def line_amounts(txt):
+            return self._parse_money_tokens_from_text(txt)
+
+        def looks_like_summary(txt):
+            low = txt.lower()
+            return ("summary" in low) or ("vat" in low) or ("gross" in low)
+
+        def score_candidate(txt, amounts):
+            score = 0
+            if "$" in txt:
+                score += 5
+            if looks_like_summary(txt):
+                score += 3
+            score += min(len(amounts), 5)
+            if len(amounts) >= 3:
+                svals = sorted(set(amounts))
+                if len(svals) >= 3:
+                    tax, net_worth, total = svals[0], svals[1], svals[-1]
+                    if abs((net_worth + tax) - total) <= self._summary_arithmetic_tol(total):
+                        score += 5
+            return score
+
+        for txt, _ in line_texts:
+            am = line_amounts(txt)
+            debug["lines"].append({"text_preview": txt[:240], "amounts": am})
+
+        def validate_three(d):
+            if not d or "total_amount" not in d:
+                return False
+            if "tax" not in d:
+                return False
+            if "net_worth" not in d:
+                # Two-field fallback: tax + total only (no arithmetic check)
+                return True
+            tax = float(d["tax"])
+            net_worth = float(d["net_worth"])
+            total_amount = float(d["total_amount"])
+            return abs((tax + net_worth) - total_amount) <= self._summary_arithmetic_tol(total_amount)
+
+        # 0) Template invoices: after a standalone SUMMARY line, scan the next few rows for a
+        #    VAT summary value row like ``10% 6 579,11 657,91 7 237,02`` (strip leading NN% first).
+        for i, (txt, _) in enumerate(line_texts):
+            title = self._normalize_money_line_whitespace(txt).strip().lower()
+            if title == "summary":
+                for j in range(i + 1, min(i + 6, len(line_texts))):
+                    raw_line = self._normalize_money_line_whitespace(line_texts[j][0])
+                    if raw_line.strip().lower() == "summary":
+                        continue
+                    stripped = re.sub(r"^\s*\d{1,3}\s*%\s*", "", raw_line, flags=re.I)
+                    amt_stripped = self._parse_money_tokens_from_text(stripped)
+                    amt_full = self._parse_money_tokens_from_text(raw_line)
+                    amounts = amt_stripped if len(amt_stripped) >= 2 else amt_full
+                    if len(amounts) >= 2:
+                        trial = self._assign_summary_from_amounts(amounts)
+                        if validate_three(trial):
+                            debug["path"] = "summary_row_after_summary_heading"
+                            debug["result"] = dict(trial)
+                            debug["summary_value_row_index"] = j
+                            return trial, debug
+                break
+
+        candidates = []
+        for txt, _ in line_texts:
+            amounts = line_amounts(txt)
+            if len(amounts) >= 2:
+                candidates.append((score_candidate(txt, amounts), txt, amounts))
+
+        candidate_amounts = None
+        best_txt = None
+        if candidates:
+            candidates.sort(key=lambda x: x[0], reverse=True)
+            best_score, best_txt, best_amounts = candidates[0]
+            debug["candidates"] = [
+                {"score": float(s), "text_preview": t[:200], "amounts": a} for s, t, a in candidates[:8]
+            ]
+            if len(best_amounts) >= 2:
+                candidate_amounts = best_amounts
+
+        result = {}
+
+        # First pass: best candidate line (arithmetic-first)
+        if candidate_amounts and len(candidate_amounts) >= 2:
+            trial = self._assign_summary_from_amounts(candidate_amounts)
+            if validate_three(trial):
+                debug["path"] = "best_line"
+                debug["result"] = dict(trial)
+                return trial, debug
+
+        # Second pass: any line with 3+ amounts
+        for txt, _ in line_texts:
+            amounts = line_amounts(txt)
+            if len(amounts) >= 3:
+                trial = self._assign_summary_from_amounts(amounts)
+                if trial.get("tax") and trial.get("net_worth") and trial.get("total_amount"):
+                    if validate_three(trial):
+                        debug["path"] = "second_pass_line"
+                        debug["result"] = dict(trial)
+                        return trial, debug
+
+        # Final fallback: all bottom-region monetary tokens (pruned if huge)
+        all_amounts = []
+        for txt, _ in line_texts:
+            all_amounts.extend(line_amounts(txt))
+
+        if all_amounts:
+            u = sorted(set(all_amounts))
+            pool = list(u) if len(u) <= 15 else sorted(set(u[:5] + u[-10:]))
+            result = self._assign_summary_from_amounts(pool)
+            debug["path"] = "fallback_all_amounts"
+            debug["result"] = dict(result)
+            debug["fallback_pool_size"] = len(set(all_amounts))
+            return result, debug
+
+        return {}, debug
+
     def extract_bottom_totals(self, bottom_words):
         """
         Extract tax, net_worth, and total_amount from the bottom region.
@@ -210,12 +487,7 @@ class PytesseractInvoiceTextDetector:
         Preference order:
         1) lines containing '$'
         2) lines containing summary-like labels
-        3) arithmetic consistency: net_worth + tax ≈ total_amount
-
-        Rule:
-        - smallest numeric summary value -> tax
-        - middle value                  -> net_worth
-        - largest value                  -> total_amount
+        3) arithmetic consistency: tax + net_worth ≈ total_amount (best triplet)
 
         Parameters
         ----------
@@ -230,131 +502,35 @@ class PytesseractInvoiceTextDetector:
             - net_worth
             - total_amount
         """
-        if not bottom_words:
-            return {}
-
-        lines = self._cluster_words_by_line(bottom_words)
-        line_texts = []
-        for line in lines:
-            txt = " ".join(w["text"] for w in sorted(line["words"], key=lambda x: x["bbox"][0]))
-            line_texts.append((txt, line["words"]))
-
-        money_pattern = re.compile(r"(?<!\w)\d[\d\s.,]*[.,]\d{2}(?!\w)")
-
-        def line_amounts(txt):
-            amounts = []
-            for m in money_pattern.finditer(txt):
-                norm = self._normalize_money(m.group(0))
-                if norm is not None:
-                    amounts.append(float(norm))
-            return amounts
-
-        def looks_like_summary(txt):
-            low = txt.lower()
-            return ("summary" in low) or ("vat" in low) or ("gross" in low)
-
-        def score_candidate(txt, amounts):
-            score = 0
-
-            # Prefer lines with $
-            if "$" in txt:
-                score += 5
-
-            # Prefer summary-like lines
-            if looks_like_summary(txt):
-                score += 3
-
-            # Prefer lines with at least 3 numeric values
-            score += min(len(amounts), 5)
-
-            # Extra bonus if the line has the exact expected shape
-            if len(amounts) >= 3:
-                svals = sorted(set(amounts))
-                if len(svals) >= 3:
-                    tax, net_worth, total = svals[0], svals[1], svals[-1]
-                    if abs((net_worth + tax) - total) <= max(0.05 * total, 0.10):
-                        score += 5
-
-            return score
-
-        candidates = []
-        for txt, _ in line_texts:
-            amounts = line_amounts(txt)
-            if len(amounts) >= 2:
-                candidates.append((score_candidate(txt, amounts), txt, amounts))
-
-        # Choose best candidate if possible
-        candidate_amounts = None
-        if candidates:
-            candidates.sort(key=lambda x: x[0], reverse=True)
-            best_score, best_txt, best_amounts = candidates[0]
-            if len(best_amounts) >= 2:
-                candidate_amounts = best_amounts
-
-        result = {}
-
-        def assign_from_values(vals):
-            vals = sorted(set(vals))
-            if len(vals) >= 3:
-                tax = vals[0]
-                net_worth = vals[1]
-                total_amount = vals[-1]
-                return {
-                    "tax": f"{tax:.2f}",
-                    "net_worth": f"{net_worth:.2f}",
-                    "total_amount": f"{total_amount:.2f}",
-                }
-            if len(vals) == 2:
-                return {
-                    "tax": f"{min(vals):.2f}",
-                    "total_amount": f"{max(vals):.2f}",
-                }
-            return {}
-
-        # First pass: best candidate line
-        if candidate_amounts and len(candidate_amounts) >= 2:
-            result = assign_from_values(candidate_amounts)
-
-            # If we got 3 values, validate net_worth + tax ≈ total_amount
-            if "tax" in result and "net_worth" in result and "total_amount" in result:
-                tax = float(result["tax"])
-                net_worth = float(result["net_worth"])
-                total_amount = float(result["total_amount"])
-
-                if abs((tax + net_worth) - total_amount) <= max(0.05 * total_amount, 0.10):
-                    return result
-
-        # Second pass: any line with 3+ amounts
-        for txt, _ in line_texts:
-            amounts = line_amounts(txt)
-            if len(amounts) >= 3:
-                candidate = assign_from_values(amounts)
-                if candidate.get("tax") and candidate.get("net_worth") and candidate.get("total_amount"):
-                    tax = float(candidate["tax"])
-                    net_worth = float(candidate["net_worth"])
-                    total_amount = float(candidate["total_amount"])
-                    if abs((tax + net_worth) - total_amount) <= max(0.05 * total_amount, 0.10):
-                        return candidate
-
-        # Final fallback: use all bottom-region monetary tokens
-        all_amounts = []
-        for txt, _ in line_texts:
-            for m in money_pattern.finditer(txt):
-                norm = self._normalize_money(m.group(0))
-                if norm is not None:
-                    all_amounts.append(float(norm))
-
-        if all_amounts:
-            vals = sorted(set(all_amounts))
-            if len(vals) >= 3:
-                result["tax"] = f"{vals[0]:.2f}"
-                result["net_worth"] = f"{vals[1]:.2f}"
-                result["total_amount"] = f"{vals[-1]:.2f}"
-            elif len(vals) == 2:
-                result["tax"] = f"{vals[0]:.2f}"
-                result["total_amount"] = f"{vals[1]:.2f}"
-
+        result, _ = self._extract_bottom_totals_core(bottom_words)
         return result
+
+    def debug_bottom_totals(self, bottom_words):
+        """
+        Return structured debug info for bottom-line money extraction (for notebooks).
+
+        Includes each line's parsed amounts, scored line candidates, and which code path won.
+        """
+        _, dbg = self._extract_bottom_totals_core(bottom_words)
+        return dbg
+
+    def debug_bottom_totals_for_image(self, image_path):
+        """
+        Run the same bottom-band word expansion as field extraction, then return totals debug.
+
+        Use this on invoices where tax / net_worth / total_amount are NaN or clearly wrong
+        to see which OCR lines and amount tokens drove the decision.
+        """
+        image_path = str(image_path)
+        image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+        if image is None:
+            return {"error": f"could_not_read_image:{image_path}"}
+        extracted_text = self._ocr_words(image, confidence_threshold=30, psm=6)
+        if not extracted_text:
+            return {"error": "no_ocr_words"}
+        regions = self.assign_regions(extracted_text, image.shape)
+        expanded = self._expand_bottom_region_words(image.shape, regions["bottom"], extracted_text)
+        return self.debug_bottom_totals(expanded)
     
     def _find_label_word(self, extracted_text, label_pattern):
         """
@@ -619,8 +795,10 @@ class PytesseractInvoiceTextDetector:
         if client_name:
             fields["client_name"] = client_name
 
-        # Bottom summary totals
-        bottom_fields = self.extract_bottom_totals(regions["bottom"])
+        # Bottom summary totals (expand lower page band to catch summary lines)
+        expanded_bottom = self._expand_bottom_region_words(image.shape, regions["bottom"], extracted_text)
+        bottom_fields, _bt_dbg = self._extract_bottom_totals_core(expanded_bottom)
+        self._last_bottom_totals_debug = _bt_dbg
         fields.update(bottom_fields)
 
         return fields
@@ -807,6 +985,8 @@ class PytesseractInvoiceTextDetector:
             result["invoice_fields"] = self.extract_invoice_fields_region_aware(image, extracted_text, regions)
             result["table_df"] = self.extract_table_dataframe(regions["table"])
             result["success"] = True
+            if self.debug_totals:
+                result["bottom_totals_debug"] = getattr(self, "_last_bottom_totals_debug", None)
 
         except Exception as e:
             print(f"Error processing {image_path}: {str(e)}")

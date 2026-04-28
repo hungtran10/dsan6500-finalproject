@@ -26,18 +26,67 @@ def clean_amount(text):
     if text is None:
         return None
 
-    text = str(text)
-    text = re.sub(r"[$€£¥₹\s]", "", text)
-
-    matches = re.findall(r"\d+[.,]\d{2}", text)
-    if not matches:
+    raw = str(text).strip()
+    if raw == "":
         return None
 
-    value = matches[-1].replace(",", ".")
-    try:
-        return f"{float(value):.2f}"
-    except ValueError:
+    # Normalize common OCR confusions that occur in numeric areas.
+    normalized = raw.translate(str.maketrans({
+        "O": "0",
+        "o": "0",
+        "I": "1",
+        "l": "1",
+        "S": "5",
+    }))
+    # Keep spaces first so we can support "1 234,56" style values.
+    normalized = re.sub(r"[$€£¥₹]", "", normalized)
+    normalized = re.sub(r"[^0-9,.\-\s]", "", normalized)
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+
+    # Keep candidates that look like amounts:
+    # 1,234.56 | 1.234,56 | 1 234,56 | 1234.56 | 1234,56 | 1234
+    candidates = re.findall(
+        r"-?(?:\d{1,3}(?:[.,\s]\d{3})+[.,]\d{2}|\d+[.,]\d{2}|\d{3,})",
+        normalized
+    )
+    if not candidates:
         return None
+
+    def parse_candidate(token: str) -> Optional[float]:
+        token = token.strip()
+        if token == "":
+            return None
+        token = token.replace(" ", "")
+
+        # If both separators appear, rightmost one is decimal separator.
+        if "," in token and "." in token:
+            if token.rfind(",") > token.rfind("."):
+                token = token.replace(".", "").replace(",", ".")
+            else:
+                token = token.replace(",", "")
+        elif "," in token:
+            # Treat comma as decimal only when it looks like cents.
+            if re.search(r",\d{2}$", token):
+                token = token.replace(".", "").replace(",", ".")
+            else:
+                token = token.replace(",", "")
+        else:
+            # Dot-only case: remove thousands separators when needed.
+            if token.count(".") > 1:
+                parts = token.split(".")
+                token = "".join(parts[:-1]) + "." + parts[-1]
+
+        try:
+            return float(token)
+        except ValueError:
+            return None
+
+    parsed = [v for v in (parse_candidate(c) for c in candidates) if v is not None]
+    if not parsed:
+        return None
+
+    # Prefer the rightmost numeric candidate (often the target value in totals rows).
+    return f"{parsed[-1]:.2f}"
     
 class InvoiceZonalOCRPipeline:
     """
@@ -79,7 +128,7 @@ class InvoiceZonalOCRPipeline:
             "date": (0.48, 0.05, 0.30, 0.08),
 
             # Middle section
-            "vendor_name": (0.05, 0.215, 0.40, 0.02),   # Seller block
+            "seller_name": (0.05, 0.215, 0.40, 0.02),   # Seller block
             "client_name": (0.50, 0.215, 0.40, 0.02),   # Client block
 
             # Bottom-right summary section
@@ -96,8 +145,14 @@ class InvoiceZonalOCRPipeline:
             "net_worth": 7,
             "tax": 7,
             "total_amount": 7,
-            "vendor_name": 6,
+            "seller_name": 6,
             "client_name": 6,
+        }
+
+        # Allow template/evaluation compatibility when notebooks use older field names.
+        self.field_aliases = {
+            "vendor_name": "seller_name",
+            "date": "invoice_date",
         }
 
     
@@ -275,9 +330,9 @@ class InvoiceZonalOCRPipeline:
 
         if field_name in numeric_fields:
             configs = [
-                r"--oem 3 --psm 7 -c tessedit_char_whitelist=0123456789.,$",
-                r"--oem 3 --psm 6 -c tessedit_char_whitelist=0123456789.,$",
-                r"--oem 3 --psm 11 -c tessedit_char_whitelist=0123456789.,$",
+                r"--oem 3 --psm 7 -c tessedit_char_whitelist=0123456789.,$ ",
+                r"--oem 3 --psm 6 -c tessedit_char_whitelist=0123456789.,$ ",
+                r"--oem 3 --psm 11 -c tessedit_char_whitelist=0123456789.,$ ",
             ]
         else:
             configs = [
@@ -297,6 +352,21 @@ class InvoiceZonalOCRPipeline:
                         return text
                 except Exception:
                     continue
+
+        # Final numeric fallback: enlarge + close gaps in broken digits.
+        if field_name in numeric_fields:
+            try:
+                up = cv2.resize(roi, None, fx=2.0, fy=2.0, interpolation=cv2.INTER_CUBIC)
+                kernel = np.ones((2, 2), np.uint8)
+                up = cv2.morphologyEx(up, cv2.MORPH_CLOSE, kernel)
+                text = pytesseract.image_to_string(
+                    up,
+                    config=r"--oem 3 --psm 6 -c tessedit_char_whitelist=0123456789.,$ "
+                ).strip()
+                if text:
+                    return text
+            except Exception:
+                pass
 
         return ""
 
@@ -327,7 +397,7 @@ class InvoiceZonalOCRPipeline:
                     return m.group(1).strip()
             return None
 
-        if field == "vendor_name":
+        if field == "seller_name":
             # ROI often contains only the name, so use the full OCR text directly
             cleaned = clean_company_name(t)
             return cleaned if cleaned else None
@@ -406,8 +476,11 @@ class InvoiceZonalOCRPipeline:
                 text = self.ocr_roi(roi, field_name=field_name, psm=psm)
 
             zone_text[field_name] = text
-            parsed_value = self.parse_field(field_name, text)
+            canonical_field = self.field_aliases.get(field_name, field_name)
+            parsed_value = self.parse_field(canonical_field, text)
             fields[field_name] = parsed_value
+            if canonical_field != field_name:
+                fields[canonical_field] = parsed_value
 
             # if not parsed_value:
             #     print(f"[DEBUG] Failed to extract {field_name}")
@@ -517,6 +590,10 @@ class InvoiceZonalOCRPipeline:
             "total_amount",
             "net_worth",
         ]
+        pred_column_aliases = {
+            "seller_name": ["vendor_name"],
+            "invoice_date": ["date"],
+        }
 
         def normalize_value(field, value):
             if pd.isna(value) or value is None:
@@ -529,11 +606,25 @@ class InvoiceZonalOCRPipeline:
 
             if field in ["tax", "total_amount", "net_worth"]:
                 s = s.replace("$", "").replace("€", "").replace("£", "").replace("¥", "").replace("₹", "")
-                s = s.replace(" ", "")
-                if "," in s and "." not in s:
-                    s = s.replace(",", ".")
-                elif s.count(",") > 0 and s.count(".") > 0:
-                    s = s.replace(",", "")
+                s = re.sub(r"\s+", "", s)
+                s = re.sub(r"[^0-9,.\-]", "", s)
+                if s == "":
+                    return None
+
+                # Locale-aware parse: rightmost punctuation is decimal separator.
+                if "," in s and "." in s:
+                    if s.rfind(",") > s.rfind("."):
+                        s = s.replace(".", "").replace(",", ".")
+                    else:
+                        s = s.replace(",", "")
+                elif "," in s:
+                    if re.search(r",\d{2}$", s):
+                        s = s.replace(".", "").replace(",", ".")
+                    else:
+                        s = s.replace(",", "")
+                elif s.count(".") > 1:
+                    parts = s.split(".")
+                    s = "".join(parts[:-1]) + "." + parts[-1]
                 try:
                     return round(float(s), 2)
                 except Exception:
@@ -564,13 +655,17 @@ class InvoiceZonalOCRPipeline:
         rows = []
 
         for field in fields:
-            pred_col = f"{field}_pred"
             gt_col = f"{field}_gt"
+            pred_candidates = [f"{field}_pred"] + [f"{alias}_pred" for alias in pred_column_aliases.get(field, [])]
+            pred_col = next((c for c in pred_candidates if c in eval_df.columns), None)
 
-            if pred_col not in eval_df.columns or gt_col not in eval_df.columns:
+            if gt_col not in eval_df.columns:
                 continue
 
-            pred_vals = eval_df[pred_col].apply(lambda x: normalize_value(field, x))
+            if pred_col is None:
+                pred_vals = pd.Series([None] * len(eval_df), index=eval_df.index)
+            else:
+                pred_vals = eval_df[pred_col].apply(lambda x: normalize_value(field, x))
             gt_vals = eval_df[gt_col].apply(lambda x: normalize_value(field, x))
 
             valid_gt = gt_vals.notna()
