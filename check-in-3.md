@@ -23,17 +23,6 @@ Compared to OCR-only baselines, this extension adds:
   - anchor-based fallback (`seller`, `client`, etc.),
   - bleed-truncation + plausibility checks to reduce name/address contamination.
 
-### Evidence that it runs and produces outputs
-
-The `models.ipynb` notebook includes end-to-end cells for:
-
-- loading/reloading `layoutlmv3_model`,
-- running inference on test data,
-- evaluating against ground truth,
-- visualization/debug cells (name source summaries, mismatch diagnostics, token-level confidence panel support).
-
-During iterative runs, this produced stable outputs and measurable improvements (see Sections 2 and 3).
-
 ---
 
 ## 2) Comparison to Earlier Baselines
@@ -147,10 +136,3 @@ Final project goal: ship a working **Donut** pipeline and a working **SmolVLM-In
 - **Fairness risk in comparisons**: inconsistent splits or normalization would invalidate model ranking.
 - **Generalization risk**: template-specific gains may not transfer to noisier or shifted invoice layouts.
 
----
-
-## Current Takeaway
-
-- Advanced extension requirement is satisfied via `LayoutLMv3` integration and controlled ablation work.
-- Current best production-style performer is `pt_model` by aggregate test accuracy (98.84%).
-- Final phase should focus on adding Donut + SmolVLM-Instruct under the same evaluation protocol and closing remaining edge-case failures.
