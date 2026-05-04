@@ -45,18 +45,8 @@ from PIL import Image
 import torch
 from transformers import DonutProcessor, VisionEncoderDecoderModel, GenerationConfig
 
+from .donut_training_utils import CANONICAL_INVOICE_FIELDS, parse_structured_invoice_text
 from .visualize_util import create_analysis_dashboard, visualize_sample_results
-
-
-CANONICAL_INVOICE_FIELDS = [
-    "invoice_number",
-    "invoice_date",
-    # "seller_name",
-    # "client_name",
-    # "net_worth",
-    # "tax",
-    "total_amount",
-]
 
 
 @dataclass
@@ -65,11 +55,11 @@ class DonutConfig:
 
     model_name: str = "naver-clova-ix/donut-base-finetuned-cord-v2"
     task_prompt: str = "<s_invoice>"
-    max_new_tokens: int = 64
+    max_new_tokens: int = 256
     device: Optional[str] = None
     use_fp16: bool = True
-    num_beams: int = 1
-    repetition_penalty: float = 1.2
+    num_beams: int = 3
+    repetition_penalty: float = 1.0
     no_repeat_ngram_size: int = 3
     sample_seed: int = 42
 
@@ -104,14 +94,19 @@ class DonutInvoiceTextDetector:
         # align model config
         model.config.pad_token_id = tokenizer.pad_token_id
         model.config.eos_token_id = tokenizer.eos_token_id
-        model.config.decoder_start_token_id = tokenizer.bos_token_id
+        task_start_id = tokenizer.convert_tokens_to_ids(self.config.task_prompt)
+        if task_start_id in (tokenizer.unk_token_id, None):
+            enc = tokenizer.encode(self.config.task_prompt, add_special_tokens=False)
+            task_start_id = enc[0] if enc else tokenizer.bos_token_id
+        model.config.decoder_start_token_id = task_start_id
 
         # align generation config
         model.generation_config = GenerationConfig(
             pad_token_id=tokenizer.pad_token_id,
             eos_token_id=tokenizer.eos_token_id,
-            decoder_start_token_id=tokenizer.bos_token_id,
-            max_new_tokens=64,
+            decoder_start_token_id=task_start_id,
+            max_new_tokens=self.config.max_new_tokens,
+            max_length=None,
             num_beams=self.config.num_beams,
             do_sample=False,
         )
@@ -149,7 +144,7 @@ class DonutInvoiceTextDetector:
             decoder_input_ids=decoder_input_ids,
             max_new_tokens=self.config.max_new_tokens,
             do_sample=False,
-            num_beams=1,
+            num_beams=self.config.num_beams,
             repetition_penalty=self.config.repetition_penalty,
             no_repeat_ngram_size=self.config.no_repeat_ngram_size,
             pad_token_id=self.processor.tokenizer.pad_token_id,
@@ -159,25 +154,25 @@ class DonutInvoiceTextDetector:
             return_dict_in_generate=False,  # IMPORTANT: no scores returned
         )
 
-        gen_kwargs["decoder_start_token_id"] = self.processor.tokenizer.bos_token_id
+        # decoder_input_ids already equals the task prompt (e.g. <s_invoice>).
+        # Do not pass decoder_start_token_id=BOS — that mismatches fine-tuning in donut_training_utils.
 
         with torch.no_grad():
             sequences = self.model.generate(**gen_kwargs)
 
-        sequence = self.processor.batch_decode(
-            sequences, skip_special_tokens=False
-        )[0]
-
-        # Clean up tokens
-        sequence = sequence.replace(self.processor.tokenizer.eos_token or "", "")
-        sequence = sequence.replace(self.processor.tokenizer.pad_token or "", "")
-        sequence = re.sub(r"<.*?>", "", sequence, count=1).strip()
+        full_decoded = self.processor.batch_decode(sequences, skip_special_tokens=False)[0]
+        eos_tok = self.processor.tokenizer.eos_token or ""
+        pad_tok = self.processor.tokenizer.pad_token or ""
+        text_no_special = full_decoded.replace(eos_tok, "").replace(pad_tok, "")
+        # Strip Donut / BART-style task and special tags; keep bracket field line for parsers.
+        sequence = re.sub(r"<[^>]+>", "", text_no_special).strip()
 
         print("\n=== RAW MODEL OUTPUT ===")
         print(sequence[:500])
 
         return {
             "sequence": sequence,
+            "full_decoded": text_no_special.strip(),
             "avg_confidence": float("nan"),  # disabled for now
             "outputs": None,
         }
@@ -217,6 +212,35 @@ class DonutInvoiceTextDetector:
 
         return False
 
+    def _merge_bracket_field_dicts(self, *texts: Optional[str]) -> Dict[str, Any]:
+        """Combine parse_structured_invoice_text results; fill missing keys from later strings."""
+        merged: Dict[str, Any] = {}
+        for t in texts:
+            if not t or not str(t).strip():
+                continue
+            part = parse_structured_invoice_text(str(t))
+            for k, v in part.items():
+                if v in (None, ""):
+                    continue
+                if k not in merged or merged[k] in (None, ""):
+                    merged[k] = v
+        return merged
+
+    def _invoice_fields_fill_missing(
+        self, base: Dict[str, Any], fill: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Keep base values; add from fill only where base has no usable value."""
+        out = dict(base)
+        for k, v in fill.items():
+            if v is None or (isinstance(v, float) and np.isnan(v)):
+                continue
+            if str(v).strip() == "":
+                continue
+            cur = out.get(k)
+            if cur is None or cur == "" or (isinstance(cur, float) and np.isnan(cur)):
+                out[k] = v
+        return out
+
     def _parse_generated_text(self, generated_sequence: str) -> Dict[str, Any]:
         cleaned = generated_sequence.strip()
         cleaned = cleaned.replace(self.processor.tokenizer.eos_token or "", "")
@@ -250,17 +274,21 @@ class DonutInvoiceTextDetector:
 
         self.model.config.pad_token_id = tokenizer.pad_token_id
         self.model.config.eos_token_id = tokenizer.eos_token_id
-        self.model.config.decoder_start_token_id = tokenizer.bos_token_id
+        task_start_id = tokenizer.convert_tokens_to_ids(self.config.task_prompt)
+        if task_start_id in (tokenizer.unk_token_id, None):
+            enc = tokenizer.encode(self.config.task_prompt, add_special_tokens=False)
+            task_start_id = enc[0] if enc else tokenizer.bos_token_id
+        self.model.config.decoder_start_token_id = task_start_id
 
         self.model.generation_config = GenerationConfig(
             pad_token_id=tokenizer.pad_token_id,
             eos_token_id=tokenizer.eos_token_id,
-            decoder_start_token_id=tokenizer.bos_token_id,
-            max_new_tokens=64,
-            num_beams=1,
+            decoder_start_token_id=task_start_id,
+            max_new_tokens=self.config.max_new_tokens,
+            max_length=None,
+            num_beams=self.config.num_beams,
             do_sample=False,
         )
-        self.model.generation_config.max_length = None
         
         self.model.to(self.device)
         self.model.eval()
@@ -314,7 +342,7 @@ class DonutInvoiceTextDetector:
             return np.nan
 
         s = str(value).strip()
-        if s.lower() in ["", "nan", "none"]:
+        if s.lower() in ["", "nan", "none", "null"]:
             return np.nan
 
         if field in {"total_amount", "tax", "net_worth"}:
@@ -348,14 +376,33 @@ class DonutInvoiceTextDetector:
             pil_image = self._prepare_image(image_path)
             gen = self._generate_sequence(pil_image)
             sequence = gen["sequence"]
+            fd = (gen.get("full_decoded") or "").strip()
+            seq_stripped = (sequence or "").strip()
+            full_for_parse = fd if fd else seq_stripped
+            structured = self._merge_bracket_field_dicts(full_for_parse, seq_stripped)
             if self._looks_degenerate(sequence):
+                inv = self._normalize_structured_invoice_fields(structured)
+                result["extracted_text"] = sequence
                 result["raw_sequence"] = sequence
-                result["parsed_payload"] = {"raw_text": sequence}
-                result["success"] = False
+                result["parsed_payload"] = {"raw_text": sequence, **structured}
+                result["invoice_fields"] = inv
+                result["total_words"] = len(re.findall(r"\w+", sequence))
+                result["avg_confidence"] = gen.get("avg_confidence", float("nan"))
+                result["success"] = bool(inv)
                 return result
             parsed = self._parse_generated_text(sequence)
 
             invoice_fields = self.extract_invoice_fields_from_json(parsed)
+            inv_struct = self._normalize_structured_invoice_fields(structured)
+            invoice_fields = self._invoice_fields_fill_missing(invoice_fields, inv_struct)
+            # Prefer bracket parser for client only: token2json often corrupts client tags; seller is safer
+            # from JSON when the raw line uses '(client]=' spilling into the seller capture.
+            for _party in ("client_name",):
+                pv = inv_struct.get(_party)
+                if pv is None or (isinstance(pv, float) and pd.isna(pv)):
+                    continue
+                if str(pv).strip():
+                    invoice_fields[_party] = pv
             if not invoice_fields:
                 raw_text = parsed.get("raw_text", sequence) if isinstance(parsed, dict) else sequence
                 invoice_fields = self.extract_invoice_fields_from_text(raw_text)
@@ -380,6 +427,20 @@ class DonutInvoiceTextDetector:
             print(f"Error processing {image_path}: {e}")
 
         return result
+
+    def _normalize_structured_invoice_fields(self, structured: Dict[str, Any]) -> Dict[str, Any]:
+        """Normalize keys from parse_structured_invoice_text into CANONICAL_INVOICE_FIELDS."""
+        if not structured:
+            return {}
+        out: Dict[str, Any] = {}
+        for field in CANONICAL_INVOICE_FIELDS:
+            val = structured.get(field)
+            if val in (None, ""):
+                continue
+            coerced = self._coerce_field(val, field)
+            if pd.notna(coerced) and str(coerced).strip() != "":
+                out[field] = coerced
+        return out
 
     def extract_invoice_fields_from_text(self, text: str) -> Dict[str, Any]:
         """Fallback extraction from raw generated text."""
@@ -416,14 +477,18 @@ class DonutInvoiceTextDetector:
             if val is not None:
                 val = val.strip()
 
-                # Reject junk
-                if len(val) < 3:
+                if field in ("seller_name", "client_name"):
+                    if len(val) < 2:
+                        continue
+                elif len(val) < 3:
                     continue
 
                 if field in ["invoice_number"] and not re.search(r"\d", val):
                     continue
 
-                if field in ["tax", "net_worth", "total_amount"] and not re.match(r"^[0-9,]+(\.[0-9]{2})?$", val):
+                if field in ["tax", "net_worth", "total_amount"] and not re.match(
+                    r"^[0-9,]+(\.[0-9]{1,2})?$", val
+                ):
                     continue
 
                 fields[field] = val
@@ -475,8 +540,11 @@ class DonutInvoiceTextDetector:
                 except Exception:
                     pass  # fallback to regex
 
-            # Only fallback if salvage fails
-            return {}
+            structured = parse_structured_invoice_text(raw)
+            inv = self._normalize_structured_invoice_fields(structured)
+            if inv:
+                return inv
+            return self.extract_invoice_fields_from_text(raw)
 
         
         # 2. BUILD CANDIDATE SOURCES
@@ -527,8 +595,9 @@ class DonutInvoiceTextDetector:
         # 5. FALLBACK: TRY TEXT SEQUENCE
         # Sometimes Donut returns: {"text_sequence": "..."}
         if not fields and "text_sequence" in parsed:
-            #return self.extract_invoice_fields_from_text(parsed["text_sequence"])
-            return {}
+            return self.extract_invoice_fields_from_json(
+                {"raw_text": str(parsed.get("text_sequence", ""))}
+            )
         
         # 6. NORMALIZATION
         if "invoice_date" in fields:
@@ -675,15 +744,7 @@ class DonutInvoiceTextDetector:
             s = re.sub(r"^processed_", "", s)
             return Path(s).stem
 
-        fields = [
-            "invoice_number",
-            "invoice_date",
-            "seller_name",
-            "client_name",
-            "net_worth",
-            "total_amount",
-            "tax",
-        ]
+        fields = list(CANONICAL_INVOICE_FIELDS)
 
         # Build prediction dataframe
         pred_rows = []
