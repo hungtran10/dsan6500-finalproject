@@ -23,6 +23,17 @@ class PytesseractInvoiceTextDetector:
     """
 
     def __init__(self, output_dir, debug_totals=False):
+        """
+        Init.
+
+        Notes:
+            Standardized docstring style aligned with donut_model.py.
+        Inputs:
+            output_dir (Any): Input parameter.
+            debug_totals (Any): Input parameter. Defaults to False.
+        Outputs:
+            Any: Function output value.
+        """
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.debug_totals = bool(debug_totals)
@@ -33,18 +44,13 @@ class PytesseractInvoiceTextDetector:
         """
         Assign OCR words to coarse invoice layout regions based on position.
 
-        Parameters
-        ----------
-        extracted_text : list[dict]
-            OCR word records, each containing at least a "bbox" key in (x, y, w, h) format.
-        image_shape : tuple
-            Shape of the image array, typically (height, width) or (height, width, channels).
-
-        Returns
-        -------
-        dict
-            Dictionary of region names mapped to lists of OCR word records.
-            Regions include: top_left, seller, client, table, and bottom.
+        Notes:
+            Standardized docstring style aligned with donut_model.py.
+        Inputs:
+            extracted_text (Any): Input parameter.
+            image_shape (Any): Input parameter.
+        Outputs:
+            Any: Function output value.
         """
         h, w = image_shape[:2]
 
@@ -91,15 +97,12 @@ class PytesseractInvoiceTextDetector:
         """
         Reconstruct text from OCR words within a region by grouping words into lines.
 
-        Parameters
-        ----------
-        region_words : list[dict]
-            OCR word records for a single region.
-
-        Returns
-        -------
-        str
-            Reconstructed multi-line text for the region, or an empty string if no words are provided.
+        Notes:
+            Standardized docstring style aligned with donut_model.py.
+        Inputs:
+            region_words (Any): Input parameter.
+        Outputs:
+            Any: Function output value.
         """
         if not region_words:
             return ""
@@ -117,21 +120,15 @@ class PytesseractInvoiceTextDetector:
         """
         Run Tesseract OCR on a grayscale image and return filtered word-level results.
 
-        Parameters
-        ----------
-        image : numpy.ndarray
-            Grayscale image array to OCR.
-        confidence_threshold : int, optional
-            Minimum confidence score required to keep a detected word.
-        psm : int, optional
-            Tesseract page segmentation mode.
-        extra_config : str, optional
-            Additional Tesseract configuration string.
-
-        Returns
-        -------
-        list[dict]
-            List of OCR word records containing text, confidence, bounding box, and OCR indices.
+        Notes:
+            Standardized docstring style aligned with donut_model.py.
+        Inputs:
+            image (Any): Input parameter.
+            confidence_threshold (Any): Input parameter. Defaults to 30.
+            psm (Any): Input parameter. Defaults to 6.
+            extra_config (Any): Input parameter. Defaults to ''.
+        Outputs:
+            Any: Function output value.
         """
         config = f'--oem 3 --psm {psm} {extra_config}'.strip()
 
@@ -173,18 +170,13 @@ class PytesseractInvoiceTextDetector:
         """
         Group OCR words into approximate text lines using vertical proximity.
 
-        Parameters
-        ----------
-        words : list[dict]
-            OCR word records, each containing a "bbox" key.
-        y_tol : int or None, optional
-            Maximum vertical distance between words to consider them part of the same line.
-            If None, a data-driven tolerance is computed from median word height.
-
-        Returns
-        -------
-        list[dict]
-            List of line groups, where each group contains a y-position and the words assigned to that line.
+        Notes:
+            Standardized docstring style aligned with donut_model.py.
+        Inputs:
+            words (Any): Input parameter.
+            y_tol (Any): Input parameter. Defaults to None.
+        Outputs:
+            Any: Function output value.
         """
         if not words:
             return []
@@ -206,7 +198,16 @@ class PytesseractInvoiceTextDetector:
         return lines
 
     def _dedupe_ocr_words(self, words):
-        """Drop duplicate word records (same text + top-left bbox)."""
+        """
+        Drop duplicate word records (same text + top-left bbox).
+
+        Notes:
+            Standardized docstring style aligned with donut_model.py.
+        Inputs:
+            words (Any): Input parameter.
+        Outputs:
+            Any: Function output value.
+        """
         seen = set()
         out = []
         for w in words:
@@ -221,8 +222,14 @@ class PytesseractInvoiceTextDetector:
         """
         Merge strict bottom-region words with words from the lower page band.
 
-        Summary lines sometimes sit just above the geometric bottom cut used by
-        assign_regions; including a lower band reduces missing tax/total fields.
+        Notes:
+            Standardized docstring style aligned with donut_model.py.
+        Inputs:
+            image_shape (Any): Input parameter.
+            bottom_words (Any): Input parameter.
+            extracted_text (Any): Input parameter.
+        Outputs:
+            Any: Function output value.
         """
         h = int(image_shape[0])
         band_y = int(0.82 * h)
@@ -230,7 +237,16 @@ class PytesseractInvoiceTextDetector:
         return self._dedupe_ocr_words(list(bottom_words) + extra)
 
     def _summary_arithmetic_tol(self, total: float) -> float:
-        """Absolute tolerance for tax + net ≈ total (handles OCR drift on large amounts)."""
+        """
+        Absolute tolerance for tax + net ≈ total (handles OCR drift on large amounts).
+
+        Notes:
+            Standardized docstring style aligned with donut_model.py.
+        Inputs:
+            total (float): Input parameter.
+        Outputs:
+            float: Function output value.
+        """
         t = float(total)
         return max(0.015 * t, 0.75, 1.0)
 
@@ -238,8 +254,12 @@ class PytesseractInvoiceTextDetector:
         """
         Map a multiset of money floats to tax / net_worth / total_amount.
 
-        Prefer triplets (tax, net, total) with tax + net ≈ total within tolerance.
-        Falls back to sorted min / mid / max when no arithmetic-consistent triplet exists.
+        Notes:
+            Standardized docstring style aligned with donut_model.py.
+        Inputs:
+            amounts (Any): Input parameter.
+        Outputs:
+            Any: Function output value.
         """
         arr = []
         for x in amounts:
@@ -253,7 +273,16 @@ class PytesseractInvoiceTextDetector:
             return {}
 
         def try_arithmetic_triplet(value_pool):
-            """value_pool: iterable of distinct candidates (sorted descending helps)."""
+            """
+            value_pool: iterable of distinct candidates (sorted descending helps).
+
+            Notes:
+                Standardized docstring style aligned with donut_model.py.
+            Inputs:
+                value_pool (Any): Input parameter.
+            Outputs:
+                Any: Function output value.
+            """
             pool = sorted(set(value_pool), reverse=True)
             if len(pool) < 2:
                 return None
@@ -313,7 +342,16 @@ class PytesseractInvoiceTextDetector:
         return {}
 
     def _normalize_money_line_whitespace(self, txt: str) -> str:
-        """Normalize unicode spaces that break regex \\s and money tokenization."""
+        """
+        Normalize unicode spaces that break regex \s and money tokenization.
+
+        Notes:
+            Standardized docstring style aligned with donut_model.py.
+        Inputs:
+            txt (str): Input parameter.
+        Outputs:
+            str: Function output value.
+        """
         if not txt:
             return ""
         for ch in ("\u00a0", "\u202f", "\u2009", "\u2007"):
@@ -324,8 +362,12 @@ class PytesseractInvoiceTextDetector:
         """
         Parse monetary floats from one OCR line.
 
-        Handles European thousands with spaces (e.g. ``6 579,11``), compact ``657,91``,
-        and the legacy flexible pattern used before.
+        Notes:
+            Standardized docstring style aligned with donut_model.py.
+        Inputs:
+            txt (str): Input parameter.
+        Outputs:
+            list[float]: Function output value.
         """
         t = self._normalize_money_line_whitespace(txt)
         amounts: list[float] = []
@@ -353,6 +395,13 @@ class PytesseractInvoiceTextDetector:
     def _extract_bottom_totals_core(self, bottom_words):
         """
         Internal: extract tax / net_worth / total_amount plus debug trace.
+
+        Notes:
+            Standardized docstring style aligned with donut_model.py.
+        Inputs:
+            bottom_words (Any): Input parameter.
+        Outputs:
+            Any: Function output value.
         """
         debug: dict = {"lines": [], "candidates": [], "path": None, "result": {}}
 
@@ -366,13 +415,44 @@ class PytesseractInvoiceTextDetector:
             line_texts.append((txt, line["words"]))
 
         def line_amounts(txt):
+            """
+            Line amounts.
+
+            Notes:
+                Standardized docstring style aligned with donut_model.py.
+            Inputs:
+                txt (Any): Input parameter.
+            Outputs:
+                Any: Function output value.
+            """
             return self._parse_money_tokens_from_text(txt)
 
         def looks_like_summary(txt):
+            """
+            Looks like summary.
+
+            Notes:
+                Standardized docstring style aligned with donut_model.py.
+            Inputs:
+                txt (Any): Input parameter.
+            Outputs:
+                Any: Function output value.
+            """
             low = txt.lower()
             return ("summary" in low) or ("vat" in low) or ("gross" in low)
 
         def score_candidate(txt, amounts):
+            """
+            Score candidate.
+
+            Notes:
+                Standardized docstring style aligned with donut_model.py.
+            Inputs:
+                txt (Any): Input parameter.
+                amounts (Any): Input parameter.
+            Outputs:
+                Any: Function output value.
+            """
             score = 0
             if "$" in txt:
                 score += 5
@@ -392,6 +472,16 @@ class PytesseractInvoiceTextDetector:
             debug["lines"].append({"text_preview": txt[:240], "amounts": am})
 
         def validate_three(d):
+            """
+            Validate three.
+
+            Notes:
+                Standardized docstring style aligned with donut_model.py.
+            Inputs:
+                d (Any): Input parameter.
+            Outputs:
+                Any: Function output value.
+            """
             if not d or "total_amount" not in d:
                 return False
             if "tax" not in d:
@@ -484,23 +574,12 @@ class PytesseractInvoiceTextDetector:
         """
         Extract tax, net_worth, and total_amount from the bottom region.
 
-        Preference order:
-        1) lines containing '$'
-        2) lines containing summary-like labels
-        3) arithmetic consistency: tax + net_worth ≈ total_amount (best triplet)
-
-        Parameters
-        ----------
-        bottom_words : list[dict]
-            OCR word records from the bottom region of the invoice.
-
-        Returns
-        -------
-        dict
-            Dictionary containing any of the following keys when detected:
-            - tax
-            - net_worth
-            - total_amount
+        Notes:
+            Standardized docstring style aligned with donut_model.py.
+        Inputs:
+            bottom_words (Any): Input parameter.
+        Outputs:
+            Any: Function output value.
         """
         result, _ = self._extract_bottom_totals_core(bottom_words)
         return result
@@ -509,7 +588,12 @@ class PytesseractInvoiceTextDetector:
         """
         Return structured debug info for bottom-line money extraction (for notebooks).
 
-        Includes each line's parsed amounts, scored line candidates, and which code path won.
+        Notes:
+            Standardized docstring style aligned with donut_model.py.
+        Inputs:
+            bottom_words (Any): Input parameter.
+        Outputs:
+            Any: Function output value.
         """
         _, dbg = self._extract_bottom_totals_core(bottom_words)
         return dbg
@@ -518,8 +602,12 @@ class PytesseractInvoiceTextDetector:
         """
         Run the same bottom-band word expansion as field extraction, then return totals debug.
 
-        Use this on invoices where tax / net_worth / total_amount are NaN or clearly wrong
-        to see which OCR lines and amount tokens drove the decision.
+        Notes:
+            Standardized docstring style aligned with donut_model.py.
+        Inputs:
+            image_path (Any): Input parameter.
+        Outputs:
+            Any: Function output value.
         """
         image_path = str(image_path)
         image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
@@ -536,17 +624,13 @@ class PytesseractInvoiceTextDetector:
         """
         Find the first OCR word matching a label pattern such as Seller or Client.
 
-        Parameters
-        ----------
-        extracted_text : list[dict]
-            OCR word records for the full page.
-        label_pattern : str
-            Regular expression pattern used to identify the label word.
-
-        Returns
-        -------
-        dict or None
-            The first matching OCR word record, or None if no match is found.
+        Notes:
+            Standardized docstring style aligned with donut_model.py.
+        Inputs:
+            extracted_text (Any): Input parameter.
+            label_pattern (Any): Input parameter.
+        Outputs:
+            Any: Function output value.
         """
         for item in extracted_text:
             if re.search(label_pattern, item["text"], re.IGNORECASE):
@@ -557,15 +641,12 @@ class PytesseractInvoiceTextDetector:
         """
         Convert dates like 12/20/2014 or 12-20-14 to YYYY-MM-DD.
 
-        Parameters
-        ----------
-        value : any
-            Raw date value extracted from OCR or ground truth.
-
-        Returns
-        -------
-        str or None
-            Normalized date string in YYYY-MM-DD format, or None if parsing fails.
+        Notes:
+            Standardized docstring style aligned with donut_model.py.
+        Inputs:
+            value (Any): Input parameter.
+        Outputs:
+            Any: Function output value.
         """
         if value is None or pd.isna(value):
             return None
@@ -583,20 +664,13 @@ class PytesseractInvoiceTextDetector:
     def _normalize_money(self, value):
         """
         Normalize money strings to a plain decimal string with 2 places.
-        Examples:
-        - 1 140,24 -> 1140.24
-        - 1,140.24 -> 1140.24
-        - 103,66   -> 103.66
 
-        Parameters
-        ----------
-        value : any
-            Raw money value extracted from OCR or ground truth.
-
-        Returns
-        -------
-        str or None
-            Normalized numeric string such as '1140.24', or None if parsing fails.
+        Notes:
+            Standardized docstring style aligned with donut_model.py.
+        Inputs:
+            value (Any): Input parameter.
+        Outputs:
+            Any: Function output value.
         """
         if value is None or pd.isna(value):
             return None
@@ -622,26 +696,16 @@ class PytesseractInvoiceTextDetector:
 
     def extract_party_name(self, image, extracted_text, party="seller"):
         """
-        Extract seller_name or client_name by:
-        1) finding the label on the page
-        2) cropping the correct half of the page
-        3) stopping crop before the table starts
-        4) OCR'ing the crop
-        5) selecting the most likely name line
+        Extract seller_name or client_name by:.
 
-        Parameters
-        ----------
-        image : numpy.ndarray
-            Grayscale invoice image.
-        extracted_text : list[dict]
-            OCR word records from the full page.
-        party : str, optional
-            Party to extract; expected values are "seller" or "client".
-
-        Returns
-        -------
-        tuple or None
-            A tuple of (extracted_name, crop_ocr_text) if a name is found, otherwise (None, crop_ocr_text).
+        Notes:
+            Standardized docstring style aligned with donut_model.py.
+        Inputs:
+            image (Any): Input parameter.
+            extracted_text (Any): Input parameter.
+            party (Any): Input parameter. Defaults to 'seller'.
+        Outputs:
+            Any: Function output value.
         """
         h, w = image.shape[:2]
         mid = w // 2
@@ -684,17 +748,13 @@ class PytesseractInvoiceTextDetector:
         """
         Select the most likely seller or client name from OCR text produced by a cropped region.
 
-        Parameters
-        ----------
-        block_text : str
-            OCR text extracted from the cropped seller/client block.
-        party : str
-            Party being extracted; expected values are "seller" or "client".
-
-        Returns
-        -------
-        str or None
-            The extracted party name, or None if no plausible name line is found.
+        Notes:
+            Standardized docstring style aligned with donut_model.py.
+        Inputs:
+            block_text (Any): Input parameter.
+            party (Any): Input parameter.
+        Outputs:
+            Any: Function output value.
         """
 
         lines = [re.sub(r"\s+", " ", line).strip() for line in block_text.splitlines()]
@@ -720,17 +780,13 @@ class PytesseractInvoiceTextDetector:
         """
         Return the first regex capture match found in a text string.
 
-        Parameters
-        ----------
-        text : str
-            Text to search.
-        patterns : list[str]
-            Ordered list of regular expression patterns to try.
-
-        Returns
-        -------
-        str or None
-            The first matched capture group, or None if no pattern matches.
+        Notes:
+            Standardized docstring style aligned with donut_model.py.
+        Inputs:
+            text (Any): Input parameter.
+            patterns (Any): Input parameter.
+        Outputs:
+            Any: Function output value.
         """
         for pattern in patterns:
             m = re.search(pattern, text, re.IGNORECASE | re.MULTILINE)
@@ -742,26 +798,14 @@ class PytesseractInvoiceTextDetector:
         """
         Extract structured invoice fields using layout-aware OCR regions.
 
-        Parameters
-        ----------
-        image : numpy.ndarray
-            Grayscale invoice image.
-        extracted_text : list[dict]
-            OCR word records from the full page.
-        regions : dict
-            Region dictionary produced by assign_regions().
-
-        Returns
-        -------
-        dict
-            Dictionary of extracted invoice fields such as:
-            - invoice_number
-            - invoice_date
-            - seller_name
-            - client_name
-            - tax
-            - net_worth
-            - total_amount
+        Notes:
+            Standardized docstring style aligned with donut_model.py.
+        Inputs:
+            image (Any): Input parameter.
+            extracted_text (Any): Input parameter.
+            regions (Any): Input parameter.
+        Outputs:
+            Any: Function output value.
         """
         fields = {}
 
@@ -807,16 +851,12 @@ class PytesseractInvoiceTextDetector:
         """
         Parse the invoice line-item table into a structured pandas DataFrame.
 
-        Parameters
-        ----------
-        table_words : list[dict]
-            OCR word records assigned to the table region.
-
-        Returns
-        -------
-        pandas.DataFrame
-            DataFrame containing line-item rows and parsed columns such as item number,
-            description, quantity, unit, net price, net worth, VAT percentage, and gross worth.
+        Notes:
+            Standardized docstring style aligned with donut_model.py.
+        Inputs:
+            table_words (Any): Input parameter.
+        Outputs:
+            Any: Function output value.
         """
         if not table_words:
             return pd.DataFrame()
@@ -846,6 +886,17 @@ class PytesseractInvoiceTextDetector:
         header_words = sorted(lines[header_idx]["words"], key=lambda x: x["bbox"][0])
 
         def find_x_by_token(token_pattern, start_idx=0):
+            """
+            Find x by token.
+
+            Notes:
+                Standardized docstring style aligned with donut_model.py.
+            Inputs:
+                token_pattern (Any): Input parameter.
+                start_idx (Any): Input parameter. Defaults to 0.
+            Outputs:
+                Any: Function output value.
+            """
             for w in header_words[start_idx:]:
                 if re.fullmatch(token_pattern, w["text"].strip(), re.IGNORECASE):
                     return w["bbox"][0]
@@ -908,6 +959,16 @@ class PytesseractInvoiceTextDetector:
             boundaries.append((cols[i][1] + cols[i + 1][1]) / 2)
 
         def assign_col(x_center):
+            """
+            Assign col.
+
+            Notes:
+                Standardized docstring style aligned with donut_model.py.
+            Inputs:
+                x_center (Any): Input parameter.
+            Outputs:
+                Any: Function output value.
+            """
             for i, boundary in enumerate(boundaries):
                 if x_center < boundary:
                     return cols[i][0]
@@ -946,16 +1007,12 @@ class PytesseractInvoiceTextDetector:
         """
         Run OCR, region assignment, field extraction, and table parsing for one invoice image.
 
-        Parameters
-        ----------
-        image_path : str or Path
-            Path to the preprocessed invoice image.
-
-        Returns
-        -------
-        dict
-            Per-image result dictionary containing image metadata, OCR words, extracted fields,
-            parsed table data, and processing success status.
+        Notes:
+            Standardized docstring style aligned with donut_model.py.
+        Inputs:
+            image_path (Any): Input parameter.
+        Outputs:
+            Any: Function output value.
         """
         result = {
             "image_path": str(image_path),
@@ -994,6 +1051,20 @@ class PytesseractInvoiceTextDetector:
         return result
     
     def process_dataset(self, processed_images_df, batch_size=10, save_word_level=False, sample_frac=None, random_state=42):
+        """
+        Process dataset.
+
+        Notes:
+            Standardized docstring style aligned with donut_model.py.
+        Inputs:
+            processed_images_df (Any): Input parameter.
+            batch_size (Any): Input parameter. Defaults to 10.
+            save_word_level (Any): Input parameter. Defaults to False.
+            sample_frac (Any): Input parameter. Defaults to None.
+            random_state (Any): Input parameter. Defaults to 42.
+        Outputs:
+            Any: Function output value.
+        """
         successful_images = processed_images_df[
             processed_images_df["status"] == "success"
         ]
@@ -1097,17 +1168,13 @@ class PytesseractInvoiceTextDetector:
         """
         Find the vertical position of the first matching anchor word.
 
-        Parameters
-        ----------
-        extracted_text : list[dict]
-            OCR word records for the full page.
-        pattern : str
-            Regular expression pattern used to find the anchor word.
-
-        Returns
-        -------
-        int or None
-            The smallest y-position among matching words, or None if no match is found.
+        Notes:
+            Standardized docstring style aligned with donut_model.py.
+        Inputs:
+            extracted_text (Any): Input parameter.
+            pattern (Any): Input parameter.
+        Outputs:
+            Any: Function output value.
         """
         ys = [
             item["bbox"][1]
@@ -1120,20 +1187,14 @@ class PytesseractInvoiceTextDetector:
         """
         Compare extracted invoice fields against ground-truth values using exact-match metrics.
 
-        Parameters
-        ----------
-        ground_truth_df : pandas.DataFrame
-            Ground-truth dataset containing the labeled invoice fields.
-        merge_key : str, optional
-            Column used to align predictions with ground truth.
-        restrict_to_matched : bool, optional
-            Whether to score only rows present in both predictions and ground truth.
-
-        Returns
-        -------
-        tuple
-            A tuple of (metrics_df, overall_metrics), where metrics_df contains per-field
-            accuracy, precision, recall, and F1, and overall_metrics contains micro-averaged scores.
+        Notes:
+            Standardized docstring style aligned with donut_model.py.
+        Inputs:
+            ground_truth_df (Any): Input parameter.
+            merge_key (Any): Input parameter. Defaults to 'processed_file'.
+            restrict_to_matched (Any): Input parameter. Defaults to True.
+        Outputs:
+            Any: Function output value.
         """
         if not hasattr(self, "full_results"):
             raise ValueError("Run process_dataset() first.")
@@ -1187,14 +1248,12 @@ class PytesseractInvoiceTextDetector:
         """
         Print aggregate OCR and field extraction statistics for a batch of processed images.
 
-        Parameters
-        ----------
-        results : list[dict]
-            List of per-image result dictionaries returned by process_single_image().
-
-        Returns
-        -------
-        None
+        Notes:
+            Standardized docstring style aligned with donut_model.py.
+        Inputs:
+            results (Any): Input parameter.
+        Outputs:
+            Any: Function output value.
         """
         successful = [r for r in results if r['success']]
         failed = [r for r in results if not r['success']]
@@ -1227,16 +1286,13 @@ class PytesseractInvoiceTextDetector:
         """
         Visualize OCR word boxes and extracted fields for a single invoice image.
 
-        Parameters
-        ----------
-        image_path : str or Path
-            Path to the invoice image.
-        result : dict
-            Result dictionary returned by process_single_image().
-
-        Returns
-        -------
-        None
+        Notes:
+            Standardized docstring style aligned with donut_model.py.
+        Inputs:
+            image_path (Any): Input parameter.
+            result (Any): Input parameter.
+        Outputs:
+            Any: Function output value.
         """
         image = cv2.imread(str(image_path))
         if image is None:
@@ -1277,22 +1333,16 @@ class PytesseractInvoiceTextDetector:
         """
         Print end-to-end debugging output for a small sample of invoices.
 
-        Parameters
-        ----------
-        processed_images_df : pandas.DataFrame
-            DataFrame containing processed invoice image paths and status values.
-        ground_truth_df : pandas.DataFrame
-            Ground-truth labels for the same invoices.
-        sample_frac : float or None, optional
-            Fraction of eligible rows to sample for debugging.
-        n_samples : int, optional
-            Number of samples to inspect when sample_frac is not provided.
-        random_state : int, optional
-            Random seed used when sampling.
-
-        Returns
-        -------
-        None
+        Notes:
+            Standardized docstring style aligned with donut_model.py.
+        Inputs:
+            processed_images_df (Any): Input parameter.
+            ground_truth_df (Any): Input parameter.
+            sample_frac (Any): Input parameter. Defaults to None.
+            n_samples (Any): Input parameter. Defaults to 5.
+            random_state (Any): Input parameter. Defaults to 42.
+        Outputs:
+            Any: Function output value.
         """
 
         df = processed_images_df[
@@ -1401,10 +1451,30 @@ DEFAULT_FIELDS = [
 
 
 def _get_successful_results(results):
+    """
+    Get successful results.
+
+    Notes:
+        Standardized docstring style aligned with donut_model.py.
+    Inputs:
+        results (Any): Input parameter.
+    Outputs:
+        Any: Function output value.
+    """
     return [r for r in results if r.get("success")]
 
 
 def _field_display_name(field):
+    """
+    Field display name.
+
+    Notes:
+        Standardized docstring style aligned with donut_model.py.
+    Inputs:
+        field (Any): Input parameter.
+    Outputs:
+        Any: Function output value.
+    """
     rename_map = {
         "vendor_name": "seller_name",
     }
@@ -1412,6 +1482,17 @@ def _field_display_name(field):
 
 
 def _field_extraction_rates(results, fields=DEFAULT_FIELDS):
+    """
+    Field extraction rates.
+
+    Notes:
+        Standardized docstring style aligned with donut_model.py.
+    Inputs:
+        results (Any): Input parameter.
+        fields (Any): Input parameter. Defaults to DEFAULT_FIELDS.
+    Outputs:
+        Any: Function output value.
+    """
     successful = _get_successful_results(results)
     n = len(successful)
     if n == 0:
@@ -1431,6 +1512,17 @@ def _field_extraction_rates(results, fields=DEFAULT_FIELDS):
 
 
 def _field_accuracies(metrics_df, fields=DEFAULT_FIELDS):
+    """
+    Field accuracies.
+
+    Notes:
+        Standardized docstring style aligned with donut_model.py.
+    Inputs:
+        metrics_df (Any): Input parameter.
+        fields (Any): Input parameter. Defaults to DEFAULT_FIELDS.
+    Outputs:
+        Any: Function output value.
+    """
     if metrics_df is None or metrics_df.empty:
         return {f: np.nan for f in fields}
 
@@ -1446,8 +1538,15 @@ def _field_accuracies(metrics_df, fields=DEFAULT_FIELDS):
 
 def _field_outcome_counts(metrics_df, fields=DEFAULT_FIELDS):
     """
-    Returns counts needed for stacked bars:
-    correct, incorrect, missing_pred
+    Returns counts needed for stacked bars:.
+
+    Notes:
+        Standardized docstring style aligned with donut_model.py.
+    Inputs:
+        metrics_df (Any): Input parameter.
+        fields (Any): Input parameter. Defaults to DEFAULT_FIELDS.
+    Outputs:
+        Any: Function output value.
     """
     if metrics_df is None or metrics_df.empty:
         return pd.DataFrame(index=fields, columns=["correct", "incorrect", "missing_pred"]).fillna(0)

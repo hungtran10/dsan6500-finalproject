@@ -12,6 +12,16 @@ from tqdm import tqdm
 
 @staticmethod
 def clean_company_name(text):
+    """
+    Clean company name.
+
+    Notes:
+        Standardized docstring style aligned with donut_model.py.
+    Inputs:
+        text (Any): Input parameter.
+    Outputs:
+        Any: Function output value.
+    """
     if text is None:
         return None
 
@@ -23,6 +33,16 @@ def clean_company_name(text):
 
 @staticmethod
 def clean_amount(text):
+    """
+    Clean amount.
+
+    Notes:
+        Standardized docstring style aligned with donut_model.py.
+    Inputs:
+        text (Any): Input parameter.
+    Outputs:
+        Any: Function output value.
+    """
     if text is None:
         return None
 
@@ -53,6 +73,16 @@ def clean_amount(text):
         return None
 
     def parse_candidate(token: str) -> Optional[float]:
+        """
+        Parse candidate.
+
+        Notes:
+            Standardized docstring style aligned with donut_model.py.
+        Inputs:
+            token (str): Input parameter.
+        Outputs:
+            Optional[float]: Function output value.
+        """
         token = token.strip()
         if token == "":
             return None
@@ -104,6 +134,17 @@ class InvoiceZonalOCRPipeline:
         output_dir: str,
         template_zones: Optional[Dict[str, Dict[str, Tuple[float, float, float, float]]]] = None,
     ):
+        """
+        Init.
+
+        Notes:
+            Standardized docstring style aligned with donut_model.py.
+        Inputs:
+            output_dir (str): Input parameter.
+            template_zones (Optional[Dict[str, Dict[str, Tuple[float, float, float, float]]]]): Input parameter. Defaults to None.
+        Outputs:
+            Any: Function output value.
+        """
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -158,12 +199,29 @@ class InvoiceZonalOCRPipeline:
     
     # Preprocessing
     def load_image(self, image_path: str) -> Optional[np.ndarray]:
+        """
+        Load image.
+
+        Notes:
+            Standardized docstring style aligned with donut_model.py.
+        Inputs:
+            image_path (str): Input parameter.
+        Outputs:
+            Optional[np.ndarray]: Function output value.
+        """
         img = cv2.imread(str(image_path))
         return img
 
     def deskew(self, image_bgr: np.ndarray) -> np.ndarray:
         """
         Rotate image to reduce skew using the minimum-area rectangle of foreground pixels.
+
+        Notes:
+            Standardized docstring style aligned with donut_model.py.
+        Inputs:
+            image_bgr (np.ndarray): Input parameter.
+        Outputs:
+            np.ndarray: Function output value.
         """
         gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
 
@@ -196,6 +254,16 @@ class InvoiceZonalOCRPipeline:
         return rotated
 
     def clean_image(self, image_bgr: np.ndarray) -> np.ndarray:
+        """
+        Clean image.
+
+        Notes:
+            Standardized docstring style aligned with donut_model.py.
+        Inputs:
+            image_bgr (np.ndarray): Input parameter.
+        Outputs:
+            np.ndarray: Function output value.
+        """
         gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
 
         # Stronger denoising
@@ -220,7 +288,13 @@ class InvoiceZonalOCRPipeline:
     def preprocess(self, image_path: str) -> Optional[np.ndarray]:
         """
         Full page preprocessing: load, deskew, and lightly clean.
-        Returns the cleaned grayscale/binary image for ROI extraction.
+
+        Notes:
+            Standardized docstring style aligned with donut_model.py.
+        Inputs:
+            image_path (str): Input parameter.
+        Outputs:
+            Optional[np.ndarray]: Function output value.
         """
         img = self.load_image(image_path)
         if img is None:
@@ -233,11 +307,30 @@ class InvoiceZonalOCRPipeline:
     
     # ROI extraction
     def get_template_zones(self, template_name: str = "default") -> Dict[str, Tuple[float, float, float, float]]:
+        """
+        Get template zones.
+
+        Notes:
+            Standardized docstring style aligned with donut_model.py.
+        Inputs:
+            template_name (str): Input parameter. Defaults to 'default'.
+        Outputs:
+            Dict[str, Tuple[float, float, float, float]]: Function output value.
+        """
         return self.template_zones.get(template_name, self.template_zones["default"])
 
     def crop_relative_roi(self, image: np.ndarray, box: Tuple[float, float, float, float], pad: int = 0) -> np.ndarray:
         """
         Crop a region specified in normalized coordinates, with optional pixel padding.
+
+        Notes:
+            Standardized docstring style aligned with donut_model.py.
+        Inputs:
+            image (np.ndarray): Input parameter.
+            box (Tuple[float, float, float, float]): Input parameter.
+            pad (int): Input parameter. Defaults to 0.
+        Outputs:
+            np.ndarray: Function output value.
         """
         h, w = image.shape[:2]
         x_rel, y_rel, rw_rel, rh_rel = box
@@ -251,7 +344,15 @@ class InvoiceZonalOCRPipeline:
 
     def visualize_zones(self, image_path: str, template_name: str = "default") -> None:
         """
-        Draw the configured zones on top of the invoice
+        Draw the configured zones on top of the invoice.
+
+        Notes:
+            Standardized docstring style aligned with donut_model.py.
+        Inputs:
+            image_path (str): Input parameter.
+            template_name (str): Input parameter. Defaults to 'default'.
+        Outputs:
+            None: Function output value.
         """
         img = self.load_image(image_path)
         if img is None:
@@ -287,8 +388,26 @@ class InvoiceZonalOCRPipeline:
     def ocr_image(self, image: np.ndarray, psm: Optional[int] = None) -> str:
         """
         Run OCR using legacy Tesseract (OEM 0). Falls back to LSTM (OEM 1) if needed.
+
+        Notes:
+            Standardized docstring style aligned with donut_model.py.
+        Inputs:
+            image (np.ndarray): Input parameter.
+            psm (Optional[int]): Input parameter. Defaults to None.
+        Outputs:
+            str: Function output value.
         """
         def run_ocr(config):
+            """
+            Run ocr.
+
+            Notes:
+                Standardized docstring style aligned with donut_model.py.
+            Inputs:
+                config (Any): Input parameter.
+            Outputs:
+                Any: Function output value.
+            """
             return pytesseract.image_to_string(image, config=config).strip()
 
         # Adjust PSM dynamically
@@ -320,6 +439,15 @@ class InvoiceZonalOCRPipeline:
     def ocr_roi(self, roi, field_name=None, psm=6):
         """
         OCR a region with field-specific configs and fallback attempts.
+
+        Notes:
+            Standardized docstring style aligned with donut_model.py.
+        Inputs:
+            roi (Any): Input parameter.
+            field_name (Any): Input parameter. Defaults to None.
+            psm (Any): Input parameter. Defaults to 6.
+        Outputs:
+            Any: Function output value.
         """
         if roi is None or roi.size == 0:
             return ""
@@ -374,6 +502,14 @@ class InvoiceZonalOCRPipeline:
     def parse_field(self, field: str, text: str) -> Optional[str]:
         """
         Convert ROI OCR text into a field value using regex and cleanup rules.
+
+        Notes:
+            Standardized docstring style aligned with donut_model.py.
+        Inputs:
+            field (str): Input parameter.
+            text (str): Input parameter.
+        Outputs:
+            Optional[str]: Function output value.
         """
         if not text:
             return None
@@ -434,7 +570,13 @@ class InvoiceZonalOCRPipeline:
         """
         Process one invoice image end-to-end.
 
-        Returns a dictionary with OCR text by zone and final parsed fields.
+        Notes:
+            Standardized docstring style aligned with donut_model.py.
+        Inputs:
+            image_path (str): Input parameter.
+            template_name (str): Input parameter. Defaults to 'default'.
+        Outputs:
+            Dict[str, Any]: Function output value.
         """
         cleaned = self.preprocess(image_path)
         if cleaned is None:
@@ -495,89 +637,75 @@ class InvoiceZonalOCRPipeline:
 
     def process_folder(self, folder_path, template_name="default", sample_size=None, sample_frac=None,
         random_state=42, file_extensions=("*.jpg", "*.png", "*.jpeg") ):
-            """
-            Process images in a folder with optional sampling and progress tracking.
+        """
+        Process images in a folder with optional sampling and progress tracking.
 
-            Parameters
-            ----------
-            folder_path : str or Path
-                Directory containing invoice images
-            template_name : str
-                Template zone configuration
-            sample_size : int, optional
-                Number of images to randomly sample
-            sample_frac : float, optional
-                Fraction of dataset to sample (e.g., 0.1 for 10%)
-            random_state : int
-                Seed for reproducibility
-            file_extensions : tuple
-                File types to include
+        Notes:
+            Standardized docstring style aligned with donut_model.py.
+        Inputs:
+            folder_path (Any): Input parameter.
+            template_name (Any): Input parameter. Defaults to 'default'.
+            sample_size (Any): Input parameter. Defaults to None.
+            sample_frac (Any): Input parameter. Defaults to None.
+            random_state (Any): Input parameter. Defaults to 42.
+            file_extensions (Any): Input parameter. Defaults to ('*.jpg', '*.png', '*.jpeg').
+        Outputs:
+            Any: Function output value.
+        """
+        folder_path = Path(folder_path)
 
-            Returns
-            -------
-            pd.DataFrame
-            """
-            folder_path = Path(folder_path)
+        # Collect images
+        image_paths = []
+        for ext in file_extensions:
+            image_paths.extend(folder_path.glob(ext))
 
-            # Collect images
-            image_paths = []
-            for ext in file_extensions:
-                image_paths.extend(folder_path.glob(ext))
+        image_paths = sorted(image_paths)
 
-            image_paths = sorted(image_paths)
+        if len(image_paths) == 0:
+            print("No images found.")
+            return pd.DataFrame()
 
-            if len(image_paths) == 0:
-                print("No images found.")
-                return pd.DataFrame()
+        # Sampling logic
+        random.seed(random_state)
 
-            # Sampling logic
-            random.seed(random_state)
+        if sample_frac is not None:
+            k = int(len(image_paths) * sample_frac)
+            image_paths = random.sample(image_paths, k)
 
-            if sample_frac is not None:
-                k = int(len(image_paths) * sample_frac)
-                image_paths = random.sample(image_paths, k)
+        elif sample_size is not None:
+            k = min(sample_size, len(image_paths))
+            image_paths = random.sample(image_paths, k)
 
-            elif sample_size is not None:
-                k = min(sample_size, len(image_paths))
-                image_paths = random.sample(image_paths, k)
+        print(f"Processing {len(image_paths)} images...")
 
-            print(f"Processing {len(image_paths)} images...")
+        # Processing with tqdm
+        results = []
 
-            # Processing with tqdm
-            results = []
+        for img_path in tqdm(image_paths, desc="Processing invoices"):
+            result = self.process_invoice(img_path, template_name=template_name)
 
-            for img_path in tqdm(image_paths, desc="Processing invoices"):
-                result = self.process_invoice(img_path, template_name=template_name)
+            results.append({
+                "File Name": img_path.name,
+                "image_path": str(img_path),
+                "success": result["success"],
+                **result["fields"]
+            })
 
-                results.append({
-                    "File Name": img_path.name,
-                    "image_path": str(img_path),
-                    "success": result["success"],
-                    **result["fields"]
-                })
+        df = pd.DataFrame(results)
 
-            df = pd.DataFrame(results)
-
-            return df
+        return df
     
     def evaluate_against_ground_truth(self, predictions_df: pd.DataFrame, ground_truth_df: pd.DataFrame) -> pd.DataFrame:
         """
         Compare extracted OCR results against ground truth annotations.
 
-        Parameters
-        ----------
-        predictions_df : pd.DataFrame
-            Output from process_folder or a similar DataFrame with extracted fields.
-            Must contain a 'File Name' column.
-        ground_truth_df : pd.DataFrame
-            Ground truth DataFrame with columns:
-            'File Name', 'client_name', 'seller_name', 'invoice_number',
-            'invoice_date', 'due_date', 'tax', 'total_amount', 'net_worth'
-
-        Returns
-        -------
-        pd.DataFrame
-            Field-level metrics: accuracy, precision, recall, and f1.
+        Notes:
+            Standardized docstring style aligned with donut_model.py.
+        Inputs:
+            predictions_df (pd.DataFrame): Input parameter.
+            ground_truth_df (pd.DataFrame): Input parameter.
+        Outputs:
+            pd.DataFrame: Function output value.
         """
 
         fields = [
@@ -596,6 +724,17 @@ class InvoiceZonalOCRPipeline:
         }
 
         def normalize_value(field, value):
+            """
+            Normalize value.
+
+            Notes:
+                Standardized docstring style aligned with donut_model.py.
+            Inputs:
+                field (Any): Input parameter.
+                value (Any): Input parameter.
+            Outputs:
+                Any: Function output value.
+            """
             if pd.isna(value) or value is None:
                 return None
 
@@ -699,16 +838,12 @@ class InvoiceZonalOCRPipeline:
         """
         Visualize field-level evaluation metrics.
 
-        Parameters
-        ----------
-        metrics_df : pd.DataFrame
-            Output of evaluate_against_ground_truth(). Must contain:
-            - field
-            - accuracy
-            - precision
-            - recall
-            - f1
-            - support
+        Notes:
+            Standardized docstring style aligned with donut_model.py.
+        Inputs:
+            metrics_df (pd.DataFrame): Input parameter.
+        Outputs:
+            None: Function output value.
         """
         if metrics_df is None or metrics_df.empty:
             print("No metrics to visualize.")

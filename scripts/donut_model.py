@@ -51,7 +51,26 @@ from .visualize_util import create_analysis_dashboard, visualize_sample_results
 
 @dataclass
 class DonutConfig:
-    """Configuration for the Donut invoice pipeline."""
+    """
+    Runtime configuration for Donut extraction and generation.
+
+    Notes:
+        This dataclass centralizes model, decoding, and runtime options.
+
+    Inputs:
+        model_name: Hugging Face checkpoint id/path.
+        task_prompt: Decoder task token prompt.
+        max_new_tokens: Maximum generated tokens per sample.
+        device: Optional explicit device name.
+        use_fp16: Whether half precision is preferred when supported.
+        num_beams: Beam-search width for generation.
+        repetition_penalty: Penalty to reduce repeated text loops.
+        no_repeat_ngram_size: N-gram repetition blocking size.
+        sample_seed: Seed used for sampling operations.
+
+    Outputs:
+        DonutConfig instance.
+    """
 
     model_name: str = "naver-clova-ix/donut-base-finetuned-cord-v2"
     task_prompt: str = "<s_invoice>"
@@ -65,9 +84,25 @@ class DonutConfig:
 
 
 class DonutInvoiceTextDetector:
-    """End-to-end invoice extractor powered by Donut."""
+    """
+    End-to-end invoice extractor powered by Donut.
+
+    Notes:
+        Provides single-image extraction, dataset inference, and exact-match
+        evaluation against ground truth.
+    """
 
     def __init__(self, output_dir: str | Path, config: Optional[DonutConfig] = None):
+        """
+        Initialize output paths, runtime config, and Donut model artifacts.
+
+        Inputs:
+            output_dir: Directory used to persist outputs.
+            config: Optional DonutConfig override.
+
+        Outputs:
+            None.
+        """
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -78,13 +113,33 @@ class DonutInvoiceTextDetector:
 
     # Model loading / inference
     def _resolve_device(self, device: Optional[str]) -> torch.device:
-        """Resolve the device used for inference."""
+        """
+        Resolve the torch device used for inference.
+
+        Inputs:
+            device: Optional explicit device string.
+
+        Outputs:
+            torch.device: Resolved runtime device.
+        """
         if device is not None:
             return torch.device(device)
         return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     def _load_model(self, model_name: str) -> Tuple[DonutProcessor, VisionEncoderDecoderModel]:
-        """Load the Donut processor and model from Hugging Face."""
+        """
+        Load processor/model and align generation configuration.
+
+        Notes:
+            Ensures tokenizer ids and decoder start token are synchronized with
+            the configured task prompt.
+
+        Inputs:
+            model_name: Hugging Face model id/path.
+
+        Outputs:
+            Tuple[DonutProcessor, VisionEncoderDecoderModel]: Loaded artifacts.
+        """
         
         processor = DonutProcessor.from_pretrained(model_name)
         model = VisionEncoderDecoderModel.from_pretrained(model_name)
@@ -116,14 +171,33 @@ class DonutInvoiceTextDetector:
         return processor, model
 
     def _prepare_image(self, image_path: str | Path) -> Image.Image:
-        """Load an image as a PIL RGB image."""
+        """
+        Load and lightly resize an image for Donut inference.
+
+        Notes:
+            Uses thumbnail resizing to preserve aspect ratio and cap memory.
+
+        Inputs:
+            image_path: Path to source invoice image.
+
+        Outputs:
+            Image.Image: RGB PIL image.
+        """
         image = Image.open(image_path).convert("RGB")
         #image = image.resize((640, 640))
         image.thumbnail((960, 960), Image.Resampling.LANCZOS)
         return image
 
     def _build_decoder_input_ids(self) -> torch.Tensor:
-        """Build Donut decoder input ids from the configured task prompt."""
+        """
+        Build decoder prompt tokens from configured task prompt.
+
+        Inputs:
+            None.
+
+        Outputs:
+            torch.Tensor: Decoder input ids on model device.
+        """
         return self.processor.tokenizer(
             self.config.task_prompt,
             add_special_tokens=False,
@@ -131,7 +205,19 @@ class DonutInvoiceTextDetector:
         ).input_ids.to(self.device)
 
     def _generate_sequence(self, pil_image: Image.Image) -> Dict[str, Any]:
-        """Run Donut generation and return the raw generated sequence."""
+        """
+        Generate one Donut output sequence from an image.
+
+        Notes:
+            Returns both a cleaned sequence and raw decoded text fields used by
+            downstream parsing/fallback logic.
+
+        Inputs:
+            pil_image: Preprocessed RGB PIL image.
+
+        Outputs:
+            Dict[str, Any]: Sequence payload with decoded text and metadata.
+        """
         
         pixel_values = self.processor(
             pil_image, return_tensors="pt"
@@ -154,8 +240,8 @@ class DonutInvoiceTextDetector:
             return_dict_in_generate=False,  # IMPORTANT: no scores returned
         )
 
-        # decoder_input_ids already equals the task prompt (e.g. <s_invoice>).
-        # Do not pass decoder_start_token_id=BOS — that mismatches fine-tuning in donut_training_utils.
+        # decoder_input_ids already equals the task prompt (e.g. <s_invoice>);
+        # forcing BOS here can drift from training prompt alignment.
 
         with torch.no_grad():
             sequences = self.model.generate(**gen_kwargs)
@@ -178,9 +264,17 @@ class DonutInvoiceTextDetector:
         }
 
     def _sequence_confidence(self, outputs) -> float:
-        """Estimate average token confidence from generation scores.
+        """
+        Estimate average token confidence from generation scores.
 
-        Returns NaN if scores are unavailable or transition-score computation fails.
+        Notes:
+            Returns NaN when generation scores are unavailable or scoring fails.
+
+        Inputs:
+            outputs: Generation outputs object that may contain scores/sequences.
+
+        Outputs:
+            float: Mean token confidence estimate in probability space.
         """
         try:
             if not hasattr(outputs, "scores") or outputs.scores is None or len(outputs.scores) == 0:
@@ -199,6 +293,18 @@ class DonutInvoiceTextDetector:
             return float("nan")
         
     def _looks_degenerate(self, text: str) -> bool:
+        """
+        Detect low-quality repetitive generations.
+
+        Notes:
+            Flags very short text, low lexical diversity, and repeated-word loops.
+
+        Inputs:
+            text: Generated sequence string.
+
+        Outputs:
+            bool: True if the output appears degenerate.
+        """
         tokens = re.findall(r"\w+", text.lower())
         if len(tokens) < 5:
             return True
@@ -213,7 +319,19 @@ class DonutInvoiceTextDetector:
         return False
 
     def _merge_bracket_field_dicts(self, *texts: Optional[str]) -> Dict[str, Any]:
-        """Combine parse_structured_invoice_text results; fill missing keys from later strings."""
+        """
+        Merge structured-parser results from one or more candidate text strings.
+
+        Notes:
+            Keeps first non-empty value per key and fills missing fields from later
+            parses.
+
+        Inputs:
+            *texts: Candidate raw/generated text strings.
+
+        Outputs:
+            Dict[str, Any]: Merged structured key/value dictionary.
+        """
         merged: Dict[str, Any] = {}
         for t in texts:
             if not t or not str(t).strip():
@@ -229,7 +347,16 @@ class DonutInvoiceTextDetector:
     def _invoice_fields_fill_missing(
         self, base: Dict[str, Any], fill: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Keep base values; add from fill only where base has no usable value."""
+        """
+        Fill missing invoice fields in `base` with usable values from `fill`.
+
+        Inputs:
+            base: Primary extracted fields.
+            fill: Fallback extracted fields.
+
+        Outputs:
+            Dict[str, Any]: Combined dictionary with base precedence.
+        """
         out = dict(base)
         for k, v in fill.items():
             if v is None or (isinstance(v, float) and np.isnan(v)):
@@ -242,6 +369,18 @@ class DonutInvoiceTextDetector:
         return out
 
     def _parse_generated_text(self, generated_sequence: str) -> Dict[str, Any]:
+        """
+        Parse Donut generation into a structured dictionary.
+
+        Notes:
+            Tries `token2json`, then JSON parsing, then raw-text fallback.
+
+        Inputs:
+            generated_sequence: Cleaned generated sequence string.
+
+        Outputs:
+            Dict[str, Any]: Parsed payload dictionary.
+        """
         cleaned = generated_sequence.strip()
         cleaned = cleaned.replace(self.processor.tokenizer.eos_token or "", "")
         cleaned = cleaned.replace(self.processor.tokenizer.pad_token or "", "")
@@ -265,6 +404,15 @@ class DonutInvoiceTextDetector:
                 return {"raw_text": cleaned}
 
     def reload_model(self, model_name_or_path: str) -> None:
+        """
+        Reload processor/model from a new checkpoint or local path.
+
+        Inputs:
+            model_name_or_path: Hugging Face id or local directory.
+
+        Outputs:
+            None.
+        """
         self.config.model_name = model_name_or_path
 
         self.processor = DonutProcessor.from_pretrained(model_name_or_path)
@@ -296,7 +444,15 @@ class DonutInvoiceTextDetector:
     
     # Field normalization / evaluation helpers
     def _normalize_date(self, value: Any) -> Optional[str]:
-        """Normalize a date-like value to YYYY-MM-DD."""
+        """
+        Normalize a date-like value to YYYY-MM-DD.
+
+        Inputs:
+            value: Raw date value.
+
+        Outputs:
+            Optional[str]: Normalized date string or None.
+        """
         if value is None or pd.isna(value):
             return None
         s = str(value).strip()
@@ -308,7 +464,15 @@ class DonutInvoiceTextDetector:
         return None
 
     def _normalize_money(self, value: Any) -> Optional[str]:
-        """Normalize a money-like value to a fixed two-decimal string."""
+        """
+        Normalize money-like values to fixed two-decimal strings.
+
+        Inputs:
+            value: Raw currency value.
+
+        Outputs:
+            Optional[str]: Normalized numeric string or None.
+        """
         if value is None or pd.isna(value):
             return None
         s = str(value).strip().replace(" ", "")
@@ -329,7 +493,16 @@ class DonutInvoiceTextDetector:
             return None
 
     def _first_match(self, text: str, patterns: Sequence[str]) -> Optional[str]:
-        """Return the first regex capture match found in the provided text."""
+        """
+        Return first regex capture group match from text.
+
+        Inputs:
+            text: Source text.
+            patterns: Ordered regex patterns with one capture group.
+
+        Outputs:
+            Optional[str]: First matched capture, else None.
+        """
         for pattern in patterns:
             m = re.search(pattern, text, re.IGNORECASE | re.MULTILINE)
             if m:
@@ -337,7 +510,20 @@ class DonutInvoiceTextDetector:
         return None
 
     def _coerce_field(self, value: Any, field: str) -> Any:
-        """Normalize a field value for extraction or evaluation."""
+        """
+        Coerce a field value into normalized comparison format.
+
+        Notes:
+            Applies specialized normalization for money/date fields and lowercased
+            whitespace-normalized text for string fields.
+
+        Inputs:
+            value: Raw field value.
+            field: Canonical field name.
+
+        Outputs:
+            Any: Normalized value or NaN.
+        """
         if pd.isna(value):
             return np.nan
 
@@ -358,7 +544,19 @@ class DonutInvoiceTextDetector:
     
     # Public extraction methods
     def process_single_image(self, image_path: str | Path) -> Dict[str, Any]:
-        """Run Donut inference on one invoice image and return a structured result."""
+        """
+        Run full Donut extraction flow on one invoice image.
+
+        Notes:
+            Includes generation, payload parsing, field extraction/fallbacks, and
+            line-item extraction.
+
+        Inputs:
+            image_path: Path to invoice image.
+
+        Outputs:
+            Dict[str, Any]: Structured per-image result dictionary.
+        """
         result = {
             "image_path": str(image_path),
             "filename": f"processed_{Path(image_path).name}",
@@ -395,8 +593,8 @@ class DonutInvoiceTextDetector:
             invoice_fields = self.extract_invoice_fields_from_json(parsed)
             inv_struct = self._normalize_structured_invoice_fields(structured)
             invoice_fields = self._invoice_fields_fill_missing(invoice_fields, inv_struct)
-            # Prefer bracket parser for client only: token2json often corrupts client tags; seller is safer
-            # from JSON when the raw line uses '(client]=' spilling into the seller capture.
+            # Prefer bracket-parser value for client_name; token2json occasionally
+            # corrupts client tags in this dataset variant.
             for _party in ("client_name",):
                 pv = inv_struct.get(_party)
                 if pv is None or (isinstance(pv, float) and pd.isna(pv)):
@@ -416,7 +614,7 @@ class DonutInvoiceTextDetector:
             result["total_words"] = len(re.findall(r"\w+", sequence))
             result["avg_confidence"] = gen.get("avg_confidence", float("nan"))
 
-            # Mark success only if something useful was extracted
+            # Mark success only when at least one canonical field is present.
             result["success"] = bool(invoice_fields)
 
             print("RAW DONUT SEQUENCE:", sequence[:500])
@@ -429,7 +627,15 @@ class DonutInvoiceTextDetector:
         return result
 
     def _normalize_structured_invoice_fields(self, structured: Dict[str, Any]) -> Dict[str, Any]:
-        """Normalize keys from parse_structured_invoice_text into CANONICAL_INVOICE_FIELDS."""
+        """
+        Normalize structured-parser output into canonical invoice fields.
+
+        Inputs:
+            structured: Raw structured dictionary from parser utility.
+
+        Outputs:
+            Dict[str, Any]: Canonical, coerced invoice fields.
+        """
         if not structured:
             return {}
         out: Dict[str, Any] = {}
@@ -443,7 +649,18 @@ class DonutInvoiceTextDetector:
         return out
 
     def extract_invoice_fields_from_text(self, text: str) -> Dict[str, Any]:
-        """Fallback extraction from raw generated text."""
+        """
+        Extract canonical fields from free-form text using regex rules.
+
+        Notes:
+            Used as fallback when structured parsing yields limited results.
+
+        Inputs:
+            text: Raw generated text.
+
+        Outputs:
+            Dict[str, Any]: Extracted canonical invoice fields.
+        """
         if not text:
             return {}
 
@@ -511,21 +728,25 @@ class DonutInvoiceTextDetector:
         """
         Extract canonical invoice fields from parsed Donut output.
 
-        Handles:
-        - Structured JSON (ideal Donut output)
-        - Nested payloads (invoice/header/summary/etc.)
-        - Raw text fallback when structure is missing
+        Notes:
+            Handles structured JSON, common nested key layouts, recovered JSON
+            snippets inside raw text, and regex fallback extraction.
+
+        Inputs:
+            parsed: Parsed payload dictionary from Donut generation.
+
+        Outputs:
+            Dict[str, Any]: Canonical invoice field dictionary.
         """
 
         if not isinstance(parsed, dict):
             return {}
         
-        # 1. RAW TEXT FALLBACK
-        # If parser only returned text, use regex extraction
+        # 1) Raw-text fallback path.
         if "raw_text" in parsed:
             raw = parsed["raw_text"]
 
-            # Try to salvage JSON substring
+            # Try to salvage an embedded JSON substring first.
             start = raw.find("{")
             end = raw.rfind("}")
 
@@ -533,8 +754,8 @@ class DonutInvoiceTextDetector:
                 candidate = raw[start:end + 1]
 
                 try:
-                    candidate = re.sub(r',\s*}', '}', candidate)  # remove trailing commas
-                    candidate = re.sub(r'}"+', '}', candidate)   # remove extra closing quotes/braces
+                    candidate = re.sub(r',\s*}', '}', candidate)
+                    candidate = re.sub(r'}"+', '}', candidate)
                     recovered = json.loads(candidate)
                     return self.extract_invoice_fields_from_json(recovered)
                 except Exception:
@@ -546,8 +767,7 @@ class DonutInvoiceTextDetector:
                 return inv
             return self.extract_invoice_fields_from_text(raw)
 
-        
-        # 2. BUILD CANDIDATE SOURCES
+        # 2) Build candidate source dictionaries.
         candidate_sources = []
 
         # Top-level
@@ -559,8 +779,7 @@ class DonutInvoiceTextDetector:
             if isinstance(val, dict):
                 candidate_sources.append(val)
 
-        
-        # 3. FIELD LOOKUP MAP
+        # 3) Field lookup aliases.
         lookup_keys = {
             "invoice_number": ["invoice_number", "inv_no", "no", "id"],
             "invoice_date": ["invoice_date", "date", "issue_date"],
@@ -571,8 +790,7 @@ class DonutInvoiceTextDetector:
             "total_amount": ["total_amount", "total", "grand_total", "gross_worth"],
         }
 
-        
-        # 4. EXTRACT FIELDS
+        # 4) Extract fields via alias search.
         fields: Dict[str, Any] = {}
 
         for field in CANONICAL_INVOICE_FIELDS:
@@ -591,15 +809,13 @@ class DonutInvoiceTextDetector:
             if found is not None:
                 fields[field] = found
 
-        
-        # 5. FALLBACK: TRY TEXT SEQUENCE
-        # Sometimes Donut returns: {"text_sequence": "..."}
+        # 5) Fallback for text_sequence-only payloads.
         if not fields and "text_sequence" in parsed:
             return self.extract_invoice_fields_from_json(
                 {"raw_text": str(parsed.get("text_sequence", ""))}
             )
         
-        # 6. NORMALIZATION
+        # 6) Normalize date/currency fields.
         if "invoice_date" in fields:
             norm = self._normalize_date(fields["invoice_date"])
             if norm is not None:
@@ -611,7 +827,7 @@ class DonutInvoiceTextDetector:
                 if norm is not None:
                     fields[money_field] = norm
 
-        # 7. ENFORCE CANONICAL ORDER
+        # 7) Enforce canonical output ordering.
         ordered_fields = {
             field: fields[field]
             for field in CANONICAL_INVOICE_FIELDS
@@ -621,7 +837,15 @@ class DonutInvoiceTextDetector:
         return ordered_fields
 
     def extract_line_items_from_json(self, parsed: Dict[str, Any]) -> pd.DataFrame:
-        """Convert Donut line-item output into a DataFrame when available."""
+        """
+        Convert structured line-item payloads into a dataframe.
+
+        Inputs:
+            parsed: Parsed Donut payload dictionary.
+
+        Outputs:
+            pd.DataFrame: Line-item table, or empty dataframe if unavailable.
+        """
         for key in ["line_items", "items", "menu", "products", "table"]:
             if key in parsed and isinstance(parsed[key], list):
                 df = pd.DataFrame(parsed[key])
@@ -640,10 +864,27 @@ class DonutInvoiceTextDetector:
         random_state: int = 42,
         image_path_col: str = "original_path",
     ) -> pd.DataFrame:
-        """Process a dataset of images and save aggregated Donut outputs."""
+        """
+        Run batch inference and persist summary/line-item outputs.
+
+        Notes:
+            Stores summary results to `donut_invoice_results.csv` and optional
+            line-item rows to `donut_line_items.csv`.
+
+        Inputs:
+            processed_images_df: Input dataframe containing image paths.
+            batch_size: Number of rows processed per outer loop batch.
+            save_word_level: Reserved flag for backward compatibility.
+            sample_frac: Optional random sampling fraction.
+            random_state: Sampling seed.
+            image_path_col: Column with image paths to process.
+
+        Outputs:
+            pd.DataFrame: Per-image summary dataframe.
+        """
         df = processed_images_df.copy()
 
-        # Optional filtering if status exists (backward compatibility)
+        # Optional filtering if status exists.
         if "status" in df.columns:
             df = df[df["status"] == "success"].copy()
 
@@ -697,7 +938,15 @@ class DonutInvoiceTextDetector:
         return summary_df
 
     def _print_summary(self, results: List[Dict[str, Any]]) -> None:
-        """Print a concise summary of Donut extraction results."""
+        """
+        Print aggregate extraction summary statistics.
+
+        Inputs:
+            results: Per-image result dictionaries.
+
+        Outputs:
+            None.
+        """
         successful = [r for r in results if r.get("success")]
         failed = [r for r in results if not r.get("success")]
 
@@ -734,9 +983,26 @@ class DonutInvoiceTextDetector:
         restrict_to_matched: bool = True,
         ground_truth_image_col: Optional[str] = None,
     ) -> Tuple[pd.DataFrame, Dict[str, float]]:
-        """Evaluate predicted invoice fields against ground truth using exact-match metrics."""
+        """
+        Evaluate extracted invoice fields against ground truth.
+
+        Notes:
+            Uses canonical filename keys to align prediction and ground-truth rows
+            and computes field-level precision/recall/F1 and aggregate metrics.
+
+        Inputs:
+            ground_truth_df: Ground-truth dataframe containing canonical fields.
+            merge_key: Reserved for compatibility; keying uses canonical file_key.
+            restrict_to_matched: If True, evaluate only overlapping file keys.
+            ground_truth_image_col: Optional explicit ground-truth file column.
+
+        Outputs:
+            Tuple[pd.DataFrame, Dict[str, float]]:
+                - Per-field metrics dataframe
+                - Overall metrics dictionary
+        """
         if not hasattr(self, "full_results"):
-            raise ValueError("Run process_dataset() first.")
+            raise ValueError("Run run_inference() first.")
 
         def canonical_file_key(x: Any) -> str:
             s = str(x).strip().lower()
@@ -746,7 +1012,7 @@ class DonutInvoiceTextDetector:
 
         fields = list(CANONICAL_INVOICE_FIELDS)
 
-        # Build prediction dataframe
+        # Build prediction dataframe keyed by canonical file stem.
         pred_rows = []
         for r in self.full_results:
             row = {"file_key": canonical_file_key(r["filename"])}
@@ -755,7 +1021,7 @@ class DonutInvoiceTextDetector:
 
         pred_df = pd.DataFrame(pred_rows)
 
-        # Ensure all canonical fields exist in predictions
+        # Ensure all canonical fields exist in predictions.
         for field in fields:
             if field not in pred_df.columns:
                 pred_df[field] = np.nan
@@ -766,7 +1032,7 @@ class DonutInvoiceTextDetector:
         print("\nPREDICTION SAMPLE:")
         print(pred_df.head())
 
-        # Build ground truth dataframe
+        # Build ground truth dataframe keyed by canonical file stem.
         gt_df = ground_truth_df.copy()
 
         if ground_truth_image_col is None:
@@ -784,7 +1050,7 @@ class DonutInvoiceTextDetector:
 
         gt_df["file_key"] = gt_df[ground_truth_image_col].apply(canonical_file_key)
 
-        # Ensure all canonical fields exist in ground truth
+        # Ensure all canonical fields exist in ground truth.
         for field in fields:
             if field not in gt_df.columns:
                 gt_df[field] = np.nan
@@ -803,7 +1069,7 @@ class DonutInvoiceTextDetector:
             gt_df = gt_df[gt_df["file_key"].astype(str).isin(overlap_keys)].copy()
             pred_df = pred_df[pred_df["file_key"].astype(str).isin(overlap_keys)].copy()
 
-        # Outer merge so missing predictions are not silently dropped
+        # Outer merge keeps missing predictions visible in metrics.
         merged = gt_df.merge(pred_df, on="file_key", how="outer", suffixes=("_gt", "_pred"))
 
         print("Merged columns:", merged.columns.tolist())
@@ -814,7 +1080,7 @@ class DonutInvoiceTextDetector:
             gt_col = f"{field}_gt"
             pred_col = f"{field}_pred"
 
-            # If a column exists only on one side, create the missing suffixed column
+            # If a column exists only on one side, create missing counterpart.
             if gt_col not in merged.columns and field in merged.columns:
                 merged[gt_col] = merged[field]
             if pred_col not in merged.columns and field in merged.columns:
@@ -895,10 +1161,29 @@ class DonutInvoiceTextDetector:
 
 
 def _get_successful_results(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Filter result rows to successful extractions.
+
+    Inputs:
+        results: Per-image inference results.
+
+    Outputs:
+        List[Dict[str, Any]]: Successful result subset.
+    """
     return [r for r in results if r.get("success")]
 
 
 def _field_extraction_rates(results: List[Dict[str, Any]], fields: Sequence[str]) -> Dict[str, float]:
+    """
+    Compute per-field extraction rates across successful results.
+
+    Inputs:
+        results: Per-image inference results.
+        fields: Canonical fields to evaluate.
+
+    Outputs:
+        Dict[str, float]: Field -> extraction coverage ratio.
+    """
     successful = _get_successful_results(results)
     n = len(successful)
     if n == 0:
@@ -916,6 +1201,16 @@ def _field_extraction_rates(results: List[Dict[str, Any]], fields: Sequence[str]
 
 
 def _field_recalls(metrics_df: Optional[pd.DataFrame], fields: Sequence[str]) -> Dict[str, float]:
+    """
+    Build recall mapping per field from metrics dataframe.
+
+    Inputs:
+        metrics_df: Per-field metrics dataframe.
+        fields: Fields to read.
+
+    Outputs:
+        Dict[str, float]: Field -> recall value (or NaN).
+    """
     if metrics_df is None or metrics_df.empty:
         return {f: np.nan for f in fields}
 
@@ -926,6 +1221,16 @@ def _field_recalls(metrics_df: Optional[pd.DataFrame], fields: Sequence[str]) ->
     return acc
 
 def _field_accuracies(metrics_df: Optional[pd.DataFrame], fields: Sequence[str]) -> Dict[str, float]:
+    """
+    Build accuracy mapping per field from metrics dataframe.
+
+    Inputs:
+        metrics_df: Per-field metrics dataframe.
+        fields: Fields to read.
+
+    Outputs:
+        Dict[str, float]: Field -> accuracy value (or NaN).
+    """
     if metrics_df is None or metrics_df.empty:
         return {f: np.nan for f in fields}
 
@@ -936,6 +1241,16 @@ def _field_accuracies(metrics_df: Optional[pd.DataFrame], fields: Sequence[str])
     return acc
 
 def _field_precisions(metrics_df: Optional[pd.DataFrame], fields: Sequence[str]) -> Dict[str, float]:
+    """
+    Build precision mapping per field from metrics dataframe.
+
+    Inputs:
+        metrics_df: Per-field metrics dataframe.
+        fields: Fields to read.
+
+    Outputs:
+        Dict[str, float]: Field -> precision value (or NaN).
+    """
     if metrics_df is None or metrics_df.empty:
         return {f: np.nan for f in fields}
 
@@ -946,7 +1261,19 @@ def _field_precisions(metrics_df: Optional[pd.DataFrame], fields: Sequence[str])
     return prec
 
 def _field_outcome_counts(metrics_df: Optional[pd.DataFrame], fields: Sequence[str]) -> pd.DataFrame:
-    """Build per-field counts for correct / incorrect / missing predictions."""
+    """
+    Build per-field outcome counts for dashboard visualizations.
+
+    Notes:
+        Produces `correct`, `incorrect`, and `missing_pred` counts.
+
+    Inputs:
+        metrics_df: Per-field metrics dataframe.
+        fields: Fields to include in output index order.
+
+    Outputs:
+        pd.DataFrame: Indexed by field with outcome count columns.
+    """
     if metrics_df is None or metrics_df.empty:
         return pd.DataFrame(index=fields, columns=["correct", "incorrect", "missing_pred"]).fillna(0)
 

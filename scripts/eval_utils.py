@@ -13,6 +13,16 @@ DATE_FIELDS = {"invoice_date"}
 
 
 def normalize_date(value) -> str | None:
+    """
+    Normalize date.
+
+    Notes:
+        Docstring standardized for project utility modules.
+    Inputs:
+        value (Any): Input parameter.
+    Outputs:
+        str | None: Function output value.
+    """
     if value is None or pd.isna(value):
         return None
 
@@ -29,10 +39,13 @@ def normalize_date(value) -> str | None:
 def normalize_money(value) -> str | None:
     """
     Normalize money strings to a plain decimal string with 2 places.
-    Examples:
-    - 1 140,24 -> 1140.24
-    - 1,140.24 -> 1140.24
-    - 103,66   -> 103.66
+
+    Notes:
+        Docstring standardized for project utility modules.
+    Inputs:
+        value (Any): Input parameter.
+    Outputs:
+        str | None: Function output value.
     """
     if value is None or pd.isna(value):
         return None
@@ -58,6 +71,16 @@ def normalize_money(value) -> str | None:
 
 
 def normalize_text(value) -> str | None:
+    """
+    Normalize text.
+
+    Notes:
+        Docstring standardized for project utility modules.
+    Inputs:
+        value (Any): Input parameter.
+    Outputs:
+        str | None: Function output value.
+    """
     if value is None or pd.isna(value):
         return None
     s = str(value).strip()
@@ -68,6 +91,16 @@ def normalize_text(value) -> str | None:
 
 
 def default_field_normalizer(field: str) -> Callable[[object], object]:
+    """
+    Default field normalizer.
+
+    Notes:
+        Docstring standardized for project utility modules.
+    Inputs:
+        field (str): Input parameter.
+    Outputs:
+        Callable[[object], object]: Function output value.
+    """
     if field in MONEY_FIELDS:
         return lambda v: normalize_money(v)
     if field in DATE_FIELDS:
@@ -83,6 +116,16 @@ class ExactMatchOverall:
     f1: float | np.floating | None
 
     def as_dict(self) -> dict:
+        """
+        As dict.
+
+        Notes:
+            Docstring standardized for project utility modules.
+        Inputs:
+            None.
+        Outputs:
+            dict: Function output value.
+        """
         return {
             "accuracy": self.accuracy,
             "precision": self.precision,
@@ -103,11 +146,17 @@ def evaluate_exact_match(
     """
     Shared exact-match evaluator used across pipelines.
 
-    Expected schema:
-    - `ground_truth_df` contains ground-truth columns for each field.
-    - `pred_df` contains predicted columns for each field.
-    - Both contain `merge_key`.
-    - After merge, columns are suffixed with `_gt` and `_pred`.
+    Notes:
+        Docstring standardized for project utility modules.
+    Inputs:
+        ground_truth_df (pd.DataFrame): Input parameter.
+        pred_df (pd.DataFrame): Input parameter.
+        fields (Iterable[str]): Input parameter.
+        merge_key (str): Input parameter. Defaults to 'processed_file'.
+        restrict_to_matched (bool): Input parameter. Defaults to True.
+        field_normalizer_factory (Callable[[str], Callable[[object], object]]): Input parameter. Defaults to default_field_normalizer.
+    Outputs:
+        tuple[pd.DataFrame, dict]: Function output value.
     """
 
     pred_keys = set(pred_df[merge_key].astype(str))
@@ -202,7 +251,17 @@ def summarize_field_prediction_gaps(
     """
     For each field, count rows where GT is non-empty but prediction is missing (normalized).
 
-    Use this to separate "wrong string" errors from empty predictions when accuracy drops.
+    Notes:
+        Docstring standardized for project utility modules.
+    Inputs:
+        ground_truth_df (pd.DataFrame): Input parameter.
+        pred_df (pd.DataFrame): Input parameter.
+        fields (Iterable[str]): Input parameter.
+        merge_key (str): Input parameter. Defaults to 'processed_file'.
+        field_normalizer_factory (Callable[[str], Callable[[object], object]]): Input parameter. Defaults to default_field_normalizer.
+        max_examples (int): Input parameter. Defaults to 8.
+    Outputs:
+        pd.DataFrame: Function output value.
     """
     merged = ground_truth_df.merge(
         pred_df,

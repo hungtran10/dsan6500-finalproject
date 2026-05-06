@@ -69,7 +69,16 @@ class DonutFineTuningConfig:
 
 # Device helpers
 def resolve_donut_device(device: Optional[str] = None) -> torch.device:
-    """Resolve the best available device for Donut training/inference."""
+    """
+    Resolve the best available device for Donut training/inference.
+
+    Notes:
+        Standardized docstring style for Donut training utilities.
+    Inputs:
+        device (Optional[str]): Input parameter. Defaults to None.
+    Outputs:
+        torch.device: Function output value.
+    """
     if device is not None:
         return torch.device(device)
     if torch.cuda.is_available():
@@ -80,7 +89,17 @@ def resolve_donut_device(device: Optional[str] = None) -> torch.device:
 
 
 def recommend_donut_batch_sizes(device: torch.device, model_name: str = "") -> Tuple[int, int, int]:
-    """Recommend train/eval batch sizes and gradient accumulation for the device."""
+    """
+    Recommend train/eval batch sizes and gradient accumulation for the device.
+
+    Notes:
+        Standardized docstring style for Donut training utilities.
+    Inputs:
+        device (torch.device): Input parameter.
+        model_name (str): Input parameter. Defaults to ''.
+    Outputs:
+        Tuple[int, int, int]: Function output value.
+    """
     if device.type == "mps":
         return 1, 1, 8
     if device.type == "cuda":
@@ -92,7 +111,16 @@ def recommend_donut_batch_sizes(device: torch.device, model_name: str = "") -> T
 
 # Normalization and parsing helpers
 def normalize_money(value: Any) -> Optional[str]:
-    """Normalize money strings to a plain decimal string with two places."""
+    """
+    Normalize money strings to a plain decimal string with two places.
+
+    Notes:
+        Standardized docstring style for Donut training utilities.
+    Inputs:
+        value (Any): Input parameter.
+    Outputs:
+        Optional[str]: Function output value.
+    """
     if value is None or (isinstance(value, float) and np.isnan(value)):
         return None
 
@@ -129,7 +157,16 @@ def normalize_money(value: Any) -> Optional[str]:
 
 
 def normalize_date(value: Any) -> Optional[str]:
-    """Normalize date-like values to ISO format (YYYY-MM-DD)."""
+    """
+    Normalize date-like values to ISO format (YYYY-MM-DD).
+
+    Notes:
+        Standardized docstring style for Donut training utilities.
+    Inputs:
+        value (Any): Input parameter.
+    Outputs:
+        Optional[str]: Function output value.
+    """
     if value is None or (isinstance(value, float) and np.isnan(value)):
         return None
 
@@ -144,7 +181,17 @@ def normalize_date(value: Any) -> Optional[str]:
 
 
 def normalize_invoice_field(value: Any, field_name: str) -> Any:
-    """Normalize one invoice field for training/evaluation."""
+    """
+    Normalize one invoice field for training/evaluation.
+
+    Notes:
+        Standardized docstring style for Donut training utilities.
+    Inputs:
+        value (Any): Input parameter.
+        field_name (str): Input parameter.
+    Outputs:
+        Any: Function output value.
+    """
     if value is None or (isinstance(value, float) and np.isnan(value)):
         return None
 
@@ -161,14 +208,29 @@ def normalize_invoice_field(value: Any, field_name: str) -> Any:
 
 
 def _strip_task_token(sequence: str) -> str:
-    """Remove the leading Donut task token from a decoded sequence."""
+    """
+    Remove the leading Donut task token from a decoded sequence.
+
+    Notes:
+        Standardized docstring style for Donut training utilities.
+    Inputs:
+        sequence (str): Input parameter.
+    Outputs:
+        str: Function output value.
+    """
     return re.sub(r"^<[^>]+>", "", sequence).strip()
 
 
 def safe_json_loads(sequence: str) -> Dict[str, Any]:
-    """Parse a Donut-like sequence into a dictionary when possible.
+    """
+    Parse a Donut-like sequence into a dictionary when possible.
 
-    This is the single parser used across the module.
+    Notes:
+        Standardized docstring style for Donut training utilities.
+    Inputs:
+        sequence (str): Input parameter.
+    Outputs:
+        Dict[str, Any]: Function output value.
     """
     cleaned = sequence.replace("<pad>", "").replace("</s>", "").strip()
     cleaned = _strip_task_token(cleaned)
@@ -184,7 +246,16 @@ def safe_json_loads(sequence: str) -> Dict[str, Any]:
             return {"raw_text": cleaned}
 
 def _sanitize_invoice_number_value(val: Any) -> str:
-    """Strip merged ISO tails like 56014042-10-01 → 56014042; avoid digit-concat bugs."""
+    """
+    Strip merged ISO tails like 56014042-10-01 → 56014042; avoid digit-concat bugs.
+
+    Notes:
+        Standardized docstring style for Donut training utilities.
+    Inputs:
+        val (Any): Input parameter.
+    Outputs:
+        str: Function output value.
+    """
     s = str(val).strip().lower()
     if not s:
         return ""
@@ -215,7 +286,17 @@ def _sanitize_invoice_number_value(val: Any) -> str:
 
 
 def _repair_invoice_number_from_merged_inv_no(raw: str, fields: Dict[str, Any]) -> None:
-    """Recover full invoice # when model emits [inv_no]=608664]=date (truncated in value field)."""
+    """
+    Recover full invoice # when model emits [inv_no]=608664]=date (truncated in value field).
+
+    Notes:
+        Standardized docstring style for Donut training utilities.
+    Inputs:
+        raw (str): Input parameter.
+        fields (Dict[str, Any]): Input parameter.
+    Outputs:
+        None: Function output value.
+    """
     m = re.search(r"\[inv_no\]\s*=\s*(\d+)\]\s*=", raw, flags=re.IGNORECASE)
     if not m:
         return
@@ -229,7 +310,16 @@ def _repair_invoice_number_from_merged_inv_no(raw: str, fields: Dict[str, Any]) 
 
 
 def _collect_plausible_isos(text: str) -> List[str]:
-    """ISO-like tokens with calendar-valid years in a sane range (reject 4042-… artifacts)."""
+    """
+    ISO-like tokens with calendar-valid years in a sane range (reject 4042-… artifacts).
+
+    Notes:
+        Standardized docstring style for Donut training utilities.
+    Inputs:
+        text (str): Input parameter.
+    Outputs:
+        List[str]: Function output value.
+    """
     found: List[str] = []
     for m in re.finditer(r"\d{4}-\d{2}-\d{2}", text):
         cand = m.group(0)
@@ -240,7 +330,17 @@ def _collect_plausible_isos(text: str) -> List[str]:
 
 
 def _money_decimal_is_glued_date_glitch(raw: str, m: Any) -> bool:
-    """True for '71.96' in '2014-71.96' or '11.24' in '7-11-11.24' — not invoice amounts."""
+    """
+    True for '71.96' in '2014-71.96' or '11.24' in '7-11-11.24' — not invoice amounts.
+
+    Notes:
+        Standardized docstring style for Donut training utilities.
+    Inputs:
+        raw (str): Input parameter.
+        m (Any): Input parameter.
+    Outputs:
+        bool: Function output value.
+    """
     start = m.start()
     # "2014-71.96" — fake month segment (>12) glued to a decimal
     if start >= 5 and start + 5 <= len(raw):
@@ -260,7 +360,16 @@ def _money_decimal_is_glued_date_glitch(raw: str, m: Any) -> bool:
 
 
 def _normalize_invoice_date_blob(blob: str) -> str:
-    """Normalize OCR-glued date fragments before ISO extraction."""
+    """
+    Normalize OCR-glued date fragments before ISO extraction.
+
+    Notes:
+        Standardized docstring style for Donut training utilities.
+    Inputs:
+        blob (str): Input parameter.
+    Outputs:
+        str: Function output value.
+    """
     b = str(blob or "").strip()
     if not b:
         return ""
@@ -281,6 +390,17 @@ def _normalize_invoice_date_blob(blob: str) -> str:
 
 def _best_invoice_date_iso(raw: str, fields: Dict[str, Any]) -> Optional[str]:
     # Handle common decoder artifact: "YYYY-MM-DD-20" -> "YYYY-MM-DD"
+    """
+    Best invoice date iso.
+
+    Notes:
+        Standardized docstring style for Donut training utilities.
+    Inputs:
+        raw (str): Input parameter.
+        fields (Dict[str, Any]): Input parameter.
+    Outputs:
+        Optional[str]: Function output value.
+    """
     raw = re.sub(r"(\d{4}-\d{2}-\d{2})-\d{2}(?=\D|$)", r"\1", raw)
     tag_pos = raw.find("[inv_dt]")
     if tag_pos >= 0:
@@ -306,6 +426,16 @@ def _best_invoice_date_iso(raw: str, fields: Dict[str, Any]) -> Optional[str]:
 
 
 def _safe_float(x: Any) -> Optional[float]:
+    """
+    Safe float.
+
+    Notes:
+        Standardized docstring style for Donut training utilities.
+    Inputs:
+        x (Any): Input parameter.
+    Outputs:
+        Optional[float]: Function output value.
+    """
     if x is None:
         return None
     try:
@@ -315,12 +445,31 @@ def _safe_float(x: Any) -> Optional[float]:
 
 
 def _looks_like_money_only(s: str) -> bool:
+    """
+    Looks like money only.
+
+    Notes:
+        Standardized docstring style for Donut training utilities.
+    Inputs:
+        s (str): Input parameter.
+    Outputs:
+        bool: Function output value.
+    """
     t = str(s).strip().replace(",", "").replace("$", "").replace(" ", "")
     return bool(re.match(r"^\d+\.\d{2}$", t))
 
 
 def _clean_party_name_text(s: Any) -> str:
-    """Clean seller/client name text while keeping normal punctuation."""
+    """
+    Clean seller/client name text while keeping normal punctuation.
+
+    Notes:
+        Standardized docstring style for Donut training utilities.
+    Inputs:
+        s (Any): Input parameter.
+    Outputs:
+        str: Function output value.
+    """
     t = str(s or "").strip()
     if not t:
         return ""
@@ -354,7 +503,16 @@ def _clean_party_name_text(s: Any) -> str:
 
 
 def _trim_seller_value_at_client_spill(sn: str) -> str:
-    """Decoder often uses '(client]=' / '(client)=' instead of '[client]='; seller capture runs until the next '[' tag only, so cut those spills."""
+    """
+    Decoder often uses '(client]=' / '(client)=' instead of '[client]='; seller capture runs until the next '[' tag only, so cut those spills.
+
+    Notes:
+        Standardized docstring style for Donut training utilities.
+    Inputs:
+        sn (str): Input parameter.
+    Outputs:
+        str: Function output value.
+    """
     t = (sn or "").strip()
     if not t:
         return t
@@ -375,6 +533,16 @@ def _trim_seller_value_at_client_spill(sn: str) -> str:
 
 
 def _client_pipe_segment_is_junk(seg: str) -> bool:
+    """
+    Client pipe segment is junk.
+
+    Notes:
+        Standardized docstring style for Donut training utilities.
+    Inputs:
+        seg (str): Input parameter.
+    Outputs:
+        bool: Function output value.
+    """
     s = (seg or "").strip()
     if not s:
         return True
@@ -388,7 +556,16 @@ def _client_pipe_segment_is_junk(seg: str) -> bool:
 
 
 def _strip_client_name_money_leak(t: str) -> str:
-    """Remove trailing indexed-bracket or broken bracket junk from client only (after [net] extraction)."""
+    """
+    Remove trailing indexed-bracket or broken bracket junk from client only (after [net] extraction).
+
+    Notes:
+        Standardized docstring style for Donut training utilities.
+    Inputs:
+        t (str): Input parameter.
+    Outputs:
+        str: Function output value.
+    """
     if not t:
         return t
     # Corrupted client tag: "[1ient]=graham-martinez" or decoder drops "[" → "1ient]=..."
@@ -427,7 +604,16 @@ def _strip_client_name_money_leak(t: str) -> str:
 
 
 def _split_seller_embedded_client(fields: Dict[str, Any]) -> None:
-    """When seller text contains a unicode dash + client fragment, split into seller / client."""
+    """
+    When seller text contains a unicode dash + client fragment, split into seller / client.
+
+    Notes:
+        Standardized docstring style for Donut training utilities.
+    Inputs:
+        fields (Dict[str, Any]): Input parameter.
+    Outputs:
+        None: Function output value.
+    """
     sn = fields.get("seller_name")
     if not isinstance(sn, str) or not sn.strip():
         return
@@ -450,7 +636,16 @@ def _split_seller_embedded_client(fields: Dict[str, Any]) -> None:
 
 
 def _normalize_leading_money_token(s: str) -> str:
-    """Keep first dd.dd money token; strip glued junk like '70.09.09.09'."""
+    """
+    Keep first dd.dd money token; strip glued junk like '70.09.09.09'.
+
+    Notes:
+        Standardized docstring style for Donut training utilities.
+    Inputs:
+        s (str): Input parameter.
+    Outputs:
+        str: Function output value.
+    """
     t = (s or "").strip().replace(" ", "")
     # "9.9.00" (OCR duplicate middle segment) → "9.00" when last segment is cents.
     m3 = re.match(r"^(\d+)\.(\d)\.(\d{2})$", t)
@@ -461,7 +656,17 @@ def _normalize_leading_money_token(s: str) -> str:
 
 
 def _extract_tax_field(raw: str, fields: Dict[str, Any]) -> None:
-    """Best-effort tax from bracket line; handles [tax]=, typos, and [n]xx.xx glue before total."""
+    """
+    Best-effort tax from bracket line; handles [tax]=, typos, and [n]xx.xx glue before total.
+
+    Notes:
+        Standardized docstring style for Donut training utilities.
+    Inputs:
+        raw (str): Input parameter.
+        fields (Dict[str, Any]): Input parameter.
+    Outputs:
+        None: Function output value.
+    """
     if fields.get("tax"):
         return
 
@@ -527,7 +732,18 @@ def _extract_tax_field(raw: str, fields: Dict[str, Any]) -> None:
 
 
 def _refine_total_from_brackets(fields: Dict[str, Any], bracket_money: List[str], raw: str) -> None:
-    """Avoid picking a tax-sized [n]= amount as grand total when a larger bracket exists."""
+    """
+    Avoid picking a tax-sized [n]= amount as grand total when a larger bracket exists.
+
+    Notes:
+        Standardized docstring style for Donut training utilities.
+    Inputs:
+        fields (Dict[str, Any]): Input parameter.
+        bracket_money (List[str]): Input parameter.
+        raw (str): Input parameter.
+    Outputs:
+        None: Function output value.
+    """
     if not bracket_money or not fields.get("total_amount"):
         return
     try:
@@ -555,7 +771,17 @@ def _refine_total_from_brackets(fields: Dict[str, Any], bracket_money: List[str]
 
 
 def _fix_total_if_leading_digit_in_raw(raw: str, fields: Dict[str, Any]) -> None:
-    """Recover 1140.24 when model emits [11]= as [1]=140.24 and raw still contains the full token."""
+    """
+    Recover 1140.24 when model emits [11]= as [1]=140.24 and raw still contains the full token.
+
+    Notes:
+        Standardized docstring style for Donut training utilities.
+    Inputs:
+        raw (str): Input parameter.
+        fields (Dict[str, Any]): Input parameter.
+    Outputs:
+        None: Function output value.
+    """
     m2 = re.search(r"\[\d{2,}\]\s*=\s*(\d+\.\d{2})\b", raw)
     if m2:
         try:
@@ -573,7 +799,17 @@ def _fix_total_if_leading_digit_in_raw(raw: str, fields: Dict[str, Any]) -> None
 
 
 def _extract_net_dollar_tax_adjacent(raw: str, fields: Dict[str, Any]) -> None:
-    """Pattern '61563.04 $6156.30' (subtotal then tax) common when [net]/[tax] tags are missing."""
+    """
+    Pattern '61563.04 $6156.30' (subtotal then tax) common when [net]/[tax] tags are missing.
+
+    Notes:
+        Standardized docstring style for Donut training utilities.
+    Inputs:
+        raw (str): Input parameter.
+        fields (Dict[str, Any]): Input parameter.
+    Outputs:
+        None: Function output value.
+    """
     if fields.get("net_worth") and fields.get("tax"):
         return
     matches = list(re.finditer(r"(\d+\.\d{2})\s*\$\s*(\d+\.\d{2})\b", raw))
@@ -598,7 +834,17 @@ def _extract_net_dollar_tax_adjacent(raw: str, fields: Dict[str, Any]) -> None:
 
 
 def _infer_net_tax_from_balance(fields: Dict[str, Any], raw: str) -> None:
-    """Fill missing net or tax from total = net + tax; then try two decimals in raw summing to total."""
+    """
+    Fill missing net or tax from total = net + tax; then try two decimals in raw summing to total.
+
+    Notes:
+        Standardized docstring style for Donut training utilities.
+    Inputs:
+        fields (Dict[str, Any]): Input parameter.
+        raw (str): Input parameter.
+    Outputs:
+        None: Function output value.
+    """
     ta = _safe_float(fields.get("total_amount"))
     if ta is None or ta <= 0:
         return
@@ -651,7 +897,17 @@ def _infer_net_tax_from_balance(fields: Dict[str, Any], raw: str) -> None:
 
 
 def _recover_total_from_raw_decimals(raw: str, fields: Dict[str, Any]) -> None:
-    """Recover a likely grand total when parsed total is implausibly small/corrupted."""
+    """
+    Recover a likely grand total when parsed total is implausibly small/corrupted.
+
+    Notes:
+        Standardized docstring style for Donut training utilities.
+    Inputs:
+        raw (str): Input parameter.
+        fields (Dict[str, Any]): Input parameter.
+    Outputs:
+        None: Function output value.
+    """
     ta = _safe_float(fields.get("total_amount"))
     nw = _safe_float(fields.get("net_worth"))
     tx = _safe_float(fields.get("tax"))
@@ -684,7 +940,16 @@ def _recover_total_from_raw_decimals(raw: str, fields: Dict[str, Any]) -> None:
 
 
 def _maybe_swap_net_tax(fields: Dict[str, Any]) -> None:
-    """Fix inverted net/tax when values sum to total but tax dominates unrealistically."""
+    """
+    Fix inverted net/tax when values sum to total but tax dominates unrealistically.
+
+    Notes:
+        Standardized docstring style for Donut training utilities.
+    Inputs:
+        fields (Dict[str, Any]): Input parameter.
+    Outputs:
+        None: Function output value.
+    """
     nw = _safe_float(fields.get("net_worth"))
     tx = _safe_float(fields.get("tax"))
     ta = _safe_float(fields.get("total_amount"))
@@ -698,7 +963,17 @@ def _maybe_swap_net_tax(fields: Dict[str, Any]) -> None:
 
 
 def _rebalance_amount_triplet(raw: str, fields: Dict[str, Any]) -> None:
-    """Choose the most plausible (net, tax, total) triple from available decimals."""
+    """
+    Choose the most plausible (net, tax, total) triple from available decimals.
+
+    Notes:
+        Standardized docstring style for Donut training utilities.
+    Inputs:
+        raw (str): Input parameter.
+        fields (Dict[str, Any]): Input parameter.
+    Outputs:
+        None: Function output value.
+    """
     vals: List[float] = []
     for k in ("net_worth", "tax", "total_amount"):
         v = _safe_float(fields.get(k))
@@ -712,6 +987,18 @@ def _rebalance_amount_triplet(raw: str, fields: Dict[str, Any]) -> None:
         return
 
     def _score(net: float, tax: float, total: float) -> Optional[float]:
+        """
+        Score.
+
+        Notes:
+            Standardized docstring style for Donut training utilities.
+        Inputs:
+            net (float): Input parameter.
+            tax (float): Input parameter.
+            total (float): Input parameter.
+        Outputs:
+            Optional[float]: Function output value.
+        """
         if not (0 < tax < net < total):
             return None
         ratio = tax / net
@@ -747,7 +1034,17 @@ def _rebalance_amount_triplet(raw: str, fields: Dict[str, Any]) -> None:
 
 
 def _repair_amounts_from_raw_extremes(raw: str, fields: Dict[str, Any]) -> None:
-    """Final repair: use raw decimal extrema when total/net/tax are collapsed."""
+    """
+    Final repair: use raw decimal extrema when total/net/tax are collapsed.
+
+    Notes:
+        Standardized docstring style for Donut training utilities.
+    Inputs:
+        raw (str): Input parameter.
+        fields (Dict[str, Any]): Input parameter.
+    Outputs:
+        None: Function output value.
+    """
     decs = list(_raw_money_decimals(raw))
     if not decs:
         return
@@ -797,7 +1094,16 @@ def _repair_amounts_from_raw_extremes(raw: str, fields: Dict[str, Any]) -> None:
 
 
 def _snap_total_to_net_plus_tax(fields: Dict[str, Any]) -> None:
-    """If net+tax is coherent and total is clearly wrong (e.g. equals tax only), fix total."""
+    """
+    If net+tax is coherent and total is clearly wrong (e.g. equals tax only), fix total.
+
+    Notes:
+        Standardized docstring style for Donut training utilities.
+    Inputs:
+        fields (Dict[str, Any]): Input parameter.
+    Outputs:
+        None: Function output value.
+    """
     nw = _safe_float(fields.get("net_worth"))
     tx = _safe_float(fields.get("tax"))
     ta = _safe_float(fields.get("total_amount"))
@@ -813,7 +1119,17 @@ def _snap_total_to_net_plus_tax(fields: Dict[str, Any]) -> None:
 
 
 def _lift_total_when_collapsed_to_net(raw: str, fields: Dict[str, Any]) -> None:
-    """When total wrongly equals net and tax is missing, infer tax+total from a larger decimal in raw."""
+    """
+    When total wrongly equals net and tax is missing, infer tax+total from a larger decimal in raw.
+
+    Notes:
+        Standardized docstring style for Donut training utilities.
+    Inputs:
+        raw (str): Input parameter.
+        fields (Dict[str, Any]): Input parameter.
+    Outputs:
+        None: Function output value.
+    """
     nw = _safe_float(fields.get("net_worth"))
     tx = _safe_float(fields.get("tax"))
     ta = _safe_float(fields.get("total_amount"))
@@ -836,6 +1152,16 @@ def _lift_total_when_collapsed_to_net(raw: str, fields: Dict[str, Any]) -> None:
 
 
 def _raw_money_decimals(raw: str) -> List[float]:
+    """
+    Raw money decimals.
+
+    Notes:
+        Standardized docstring style for Donut training utilities.
+    Inputs:
+        raw (str): Input parameter.
+    Outputs:
+        List[float]: Function output value.
+    """
     out: List[float] = []
     for m in re.finditer(r"(?<![\d.])(\d+\.\d{2})(?!\d)", raw):
         if _money_decimal_is_glued_date_glitch(raw, m):
@@ -847,7 +1173,17 @@ def _raw_money_decimals(raw: str) -> List[float]:
 
 
 def _harmonize_money_triplet(raw: str, fields: Dict[str, Any]) -> None:
-    """Fix inflated/inconsistent net/tax/total using decimals that satisfy net+tax≈total."""
+    """
+    Fix inflated/inconsistent net/tax/total using decimals that satisfy net+tax≈total.
+
+    Notes:
+        Standardized docstring style for Donut training utilities.
+    Inputs:
+        raw (str): Input parameter.
+        fields (Dict[str, Any]): Input parameter.
+    Outputs:
+        None: Function output value.
+    """
     decs = sorted(set(_raw_money_decimals(raw)))
     if len(decs) < 2:
         return
@@ -892,7 +1228,17 @@ def _harmonize_money_triplet(raw: str, fields: Dict[str, Any]) -> None:
 
 
 def _repair_glued_hyphen_total_suffix(raw: str, fields: Dict[str, Any]) -> None:
-    """Recover total like 284.86 when decoder emits '-1284.86' (spurious leading 1 before hundreds)."""
+    """
+    Recover total like 284.86 when decoder emits '-1284.86' (spurious leading 1 before hundreds).
+
+    Notes:
+        Standardized docstring style for Donut training utilities.
+    Inputs:
+        raw (str): Input parameter.
+        fields (Dict[str, Any]): Input parameter.
+    Outputs:
+        None: Function output value.
+    """
     if fields.get("total_amount"):
         return
     m = re.search(r"-1(\d{3}\.\d{2})\s*$", raw.strip())
@@ -901,7 +1247,16 @@ def _repair_glued_hyphen_total_suffix(raw: str, fields: Dict[str, Any]) -> None:
 
 
 def _snap_net_to_implied_total_minus_tax(fields: Dict[str, Any]) -> None:
-    """When net is OCR-collapsed (e.g. 136.58 vs 1036.58) but tax+total are sane, set net = total - tax."""
+    """
+    When net is OCR-collapsed (e.g. 136.58 vs 1036.58) but tax+total are sane, set net = total - tax.
+
+    Notes:
+        Standardized docstring style for Donut training utilities.
+    Inputs:
+        fields (Dict[str, Any]): Input parameter.
+    Outputs:
+        None: Function output value.
+    """
     ta = _safe_float(fields.get("total_amount"))
     nw = _safe_float(fields.get("net_worth"))
     tx = _safe_float(fields.get("tax"))
@@ -920,7 +1275,17 @@ def _snap_net_to_implied_total_minus_tax(fields: Dict[str, Any]) -> None:
 
 
 def _reapply_coherent_bracket_amounts(raw: str, fields: Dict[str, Any]) -> None:
-    """After harmonize triplet heuristics, prefer explicit [net]/[tax]/[amt] when they balance."""
+    """
+    After harmonize triplet heuristics, prefer explicit [net]/[tax]/[amt] when they balance.
+
+    Notes:
+        Standardized docstring style for Donut training utilities.
+    Inputs:
+        raw (str): Input parameter.
+        fields (Dict[str, Any]): Input parameter.
+    Outputs:
+        None: Function output value.
+    """
     m_net = re.search(r"\[net\]\s*=\s*([\d.,]+)", raw, flags=re.IGNORECASE)
     m_tax = re.search(r"\[tax\]\s*=\s*([\d.,]+)", raw, flags=re.IGNORECASE)
     m_amt = re.search(r"\[amt\]\s*=\s*([\d.,]+)", raw, flags=re.IGNORECASE)
@@ -955,7 +1320,16 @@ def _reapply_coherent_bracket_amounts(raw: str, fields: Dict[str, Any]) -> None:
 
 
 def _fix_centifold_money_totals(fields: Dict[str, Any]) -> None:
-    """Decoder typo: total ~100× (nw+tax), e.g. 35353.60 vs net+tax 353.66."""
+    """
+    Decoder typo: total ~100× (nw+tax), e.g. 35353.60 vs net+tax 353.66.
+
+    Notes:
+        Standardized docstring style for Donut training utilities.
+    Inputs:
+        fields (Dict[str, Any]): Input parameter.
+    Outputs:
+        None: Function output value.
+    """
     nw = _safe_float(fields.get("net_worth"))
     tx = _safe_float(fields.get("tax"))
     ta = _safe_float(fields.get("total_amount"))
@@ -970,7 +1344,17 @@ def _fix_centifold_money_totals(fields: Dict[str, Any]) -> None:
 
 
 def _prefer_explicit_net_when_harmonize_inflated(raw: str, fields: Dict[str, Any]) -> None:
-    """When triplet repair chose a huge net but raw [net]= is small and matches total−tax, prefer raw."""
+    """
+    When triplet repair chose a huge net but raw [net]= is small and matches total−tax, prefer raw.
+
+    Notes:
+        Standardized docstring style for Donut training utilities.
+    Inputs:
+        raw (str): Input parameter.
+        fields (Dict[str, Any]): Input parameter.
+    Outputs:
+        None: Function output value.
+    """
     m = re.search(r"\[net\]\s*=\s*([\d.,]+)", raw, flags=re.IGNORECASE)
     if not m:
         return
@@ -992,7 +1376,17 @@ def _prefer_explicit_net_when_harmonize_inflated(raw: str, fields: Dict[str, Any
 
 
 def _fix_centifold_using_explicit_net(raw: str, fields: Dict[str, Any]) -> None:
-    """Total ~100× too large vs explicit [net]+observed tax (harmonize inflated net to match junk total)."""
+    """
+    Total ~100× too large vs explicit [net]+observed tax (harmonize inflated net to match junk total).
+
+    Notes:
+        Standardized docstring style for Donut training utilities.
+    Inputs:
+        raw (str): Input parameter.
+        fields (Dict[str, Any]): Input parameter.
+    Outputs:
+        None: Function output value.
+    """
     m = re.search(r"\[net\]\s*=\s*([\d.,]+)", raw, flags=re.IGNORECASE)
     if not m:
         return
@@ -1015,7 +1409,17 @@ def _fix_centifold_using_explicit_net(raw: str, fields: Dict[str, Any]) -> None:
 
 
 def _infer_net_tax_from_inclusive_total(fields: Dict[str, Any], raw: str) -> None:
-    """When only grand total exists (~10% VAT style), split net/tax (training bracket invoices)."""
+    """
+    When only grand total exists (~10% VAT style), split net/tax (training bracket invoices).
+
+    Notes:
+        Standardized docstring style for Donut training utilities.
+    Inputs:
+        fields (Dict[str, Any]): Input parameter.
+        raw (str): Input parameter.
+    Outputs:
+        None: Function output value.
+    """
     if fields.get("net_worth") or fields.get("tax"):
         return
     ta = _safe_float(fields.get("total_amount"))
@@ -1034,7 +1438,16 @@ def _infer_net_tax_from_inclusive_total(fields: Dict[str, Any], raw: str) -> Non
 
 
 def _repair_total_minus_century_when_matches_net_plus_tax(fields: Dict[str, Any]) -> None:
-    """Fix totals like 171.96 when net+tax=71.96 (spurious leading 1)."""
+    """
+    Fix totals like 171.96 when net+tax=71.96 (spurious leading 1).
+
+    Notes:
+        Standardized docstring style for Donut training utilities.
+    Inputs:
+        fields (Dict[str, Any]): Input parameter.
+    Outputs:
+        None: Function output value.
+    """
     ta = _safe_float(fields.get("total_amount"))
     nw = _safe_float(fields.get("net_worth"))
     tx = _safe_float(fields.get("tax"))
@@ -1052,7 +1465,17 @@ def _repair_total_minus_century_when_matches_net_plus_tax(fields: Dict[str, Any]
 
 
 def _infer_tax_total_from_net_only(fields: Dict[str, Any], raw: str) -> None:
-    """Fallback when raw has [net] but tax/total tags are missing (10% VAT-style invoices)."""
+    """
+    Fallback when raw has [net] but tax/total tags are missing (10% VAT-style invoices).
+
+    Notes:
+        Standardized docstring style for Donut training utilities.
+    Inputs:
+        fields (Dict[str, Any]): Input parameter.
+        raw (str): Input parameter.
+    Outputs:
+        None: Function output value.
+    """
     nw = _safe_float(fields.get("net_worth"))
     tx = _safe_float(fields.get("tax"))
     ta = _safe_float(fields.get("total_amount"))
@@ -1072,7 +1495,16 @@ def _infer_tax_total_from_net_only(fields: Dict[str, Any], raw: str) -> None:
 
 
 def _unpack_client_glued_amounts(fields: Dict[str, Any]) -> None:
-    """Split 'name and 12.34' or 'name =12.34' glued into invclient/client values."""
+    """
+    Split 'name and 12.34' or 'name =12.34' glued into invclient/client values.
+
+    Notes:
+        Standardized docstring style for Donut training utilities.
+    Inputs:
+        fields (Dict[str, Any]): Input parameter.
+    Outputs:
+        None: Function output value.
+    """
     cn = fields.get("client_name")
     if not isinstance(cn, str) or not cn.strip():
         return
@@ -1091,7 +1523,17 @@ def _unpack_client_glued_amounts(fields: Dict[str, Any]) -> None:
 
 
 def _recover_client_if_invclient_was_iso_date(fields: Dict[str, Any], raw: str) -> None:
-    """When model puts the invoice date in [invclient]=, recover real client from llcient]= etc."""
+    """
+    When model puts the invoice date in [invclient]=, recover real client from llcient]= etc.
+
+    Notes:
+        Standardized docstring style for Donut training utilities.
+    Inputs:
+        fields (Dict[str, Any]): Input parameter.
+        raw (str): Input parameter.
+    Outputs:
+        None: Function output value.
+    """
     cn = fields.get("client_name")
     idt = fields.get("invoice_date")
     if not isinstance(cn, str) or not idt:
@@ -1109,7 +1551,16 @@ def _recover_client_if_invclient_was_iso_date(fields: Dict[str, Any], raw: str) 
 
 
 def _repair_tax_when_ocr_dropped_two_digits(fields: Dict[str, Any]) -> None:
-    """tax]=84.48 style when net is huge and ~10%% tax should be ~8494."""
+    """
+    tax]=84.48 style when net is huge and ~10%% tax should be ~8494.
+
+    Notes:
+        Standardized docstring style for Donut training utilities.
+    Inputs:
+        fields (Dict[str, Any]): Input parameter.
+    Outputs:
+        None: Function output value.
+    """
     nw = _safe_float(fields.get("net_worth"))
     tx = _safe_float(fields.get("tax"))
     if nw is None or tx is None or nw < 500:
@@ -1123,7 +1574,16 @@ def _repair_tax_when_ocr_dropped_two_digits(fields: Dict[str, Any]) -> None:
 
 
 def _repair_total_when_sum_is_ten_x_parsed_total(fields: Dict[str, Any]) -> None:
-    """Fix [amt]=2398.86 when net+tax≈23988.86 (missing digit in total)."""
+    """
+    Fix [amt]=2398.86 when net+tax≈23988.86 (missing digit in total).
+
+    Notes:
+        Standardized docstring style for Donut training utilities.
+    Inputs:
+        fields (Dict[str, Any]): Input parameter.
+    Outputs:
+        None: Function output value.
+    """
     nw = _safe_float(fields.get("net_worth"))
     tx = _safe_float(fields.get("tax"))
     ta = _safe_float(fields.get("total_amount"))
@@ -1137,7 +1597,16 @@ def _repair_total_when_sum_is_ten_x_parsed_total(fields: Dict[str, Any]) -> None
 
 
 def _repair_tax_outlier_from_total(fields: Dict[str, Any]) -> None:
-    """If tax is implausibly large, recover tax from total-net."""
+    """
+    If tax is implausibly large, recover tax from total-net.
+
+    Notes:
+        Standardized docstring style for Donut training utilities.
+    Inputs:
+        fields (Dict[str, Any]): Input parameter.
+    Outputs:
+        None: Function output value.
+    """
     nw = _safe_float(fields.get("net_worth"))
     tx = _safe_float(fields.get("tax"))
     ta = _safe_float(fields.get("total_amount"))
@@ -1153,7 +1622,17 @@ def _repair_tax_outlier_from_total(fields: Dict[str, Any]) -> None:
 
 
 def _demote_scaled_total(raw: str, fields: Dict[str, Any]) -> None:
-    """Fix totals like 711.96 when raw clearly contains 71.96 (extra leading digit)."""
+    """
+    Fix totals like 711.96 when raw clearly contains 71.96 (extra leading digit).
+
+    Notes:
+        Standardized docstring style for Donut training utilities.
+    Inputs:
+        raw (str): Input parameter.
+        fields (Dict[str, Any]): Input parameter.
+    Outputs:
+        None: Function output value.
+    """
     ta = _safe_float(fields.get("total_amount"))
     if ta is None or ta >= 500:
         return
@@ -1167,7 +1646,16 @@ def _demote_scaled_total(raw: str, fields: Dict[str, Any]) -> None:
 
 
 def parse_structured_invoice_text(text: str) -> Dict[str, Any]:
-    """Parse Donut / training-style bracket fields and tolerant corruptions (e.g. [d]=, Lno]=)."""
+    """
+    Parse Donut / training-style bracket fields and tolerant corruptions (e.g. [d]=, Lno]=).
+
+    Notes:
+        Standardized docstring style for Donut training utilities.
+    Inputs:
+        text (str): Input parameter.
+    Outputs:
+        Dict[str, Any]: Function output value.
+    """
     raw = re.sub(r"<.*?>", "", text or "").lower().strip()
     if not raw:
         return {}
@@ -1323,6 +1811,17 @@ def parse_structured_invoice_text(text: str) -> Dict[str, Any]:
     }
 
     def _map_key(key: str, value: str = "") -> Optional[str]:
+        """
+        Map key.
+
+        Notes:
+            Standardized docstring style for Donut training utilities.
+        Inputs:
+            key (str): Input parameter.
+            value (str): Input parameter. Defaults to ''.
+        Outputs:
+            Optional[str]: Function output value.
+        """
         key_ns = key.replace(".", "_")
         stripped = re.sub(r"^\d+", "", key_ns)
         if stripped == "inclient":
@@ -1736,6 +2235,17 @@ def parse_structured_invoice_text(text: str) -> Dict[str, Any]:
     return fields
 
 def _normalize_eval_value(value: Any, field: str) -> Optional[str]:
+    """
+    Normalize eval value.
+
+    Notes:
+        Standardized docstring style for Donut training utilities.
+    Inputs:
+        value (Any): Input parameter.
+        field (str): Input parameter.
+    Outputs:
+        Optional[str]: Function output value.
+    """
     if value is None or (isinstance(value, float) and np.isnan(value)):
         return None
 
@@ -1761,6 +2271,18 @@ def _normalize_eval_value(value: Any, field: str) -> Optional[str]:
 
 
 def _field_equal_tolerant(pred_val: Any, ref_val: Any, field: str) -> bool:
+    """
+    Field equal tolerant.
+
+    Notes:
+        Standardized docstring style for Donut training utilities.
+    Inputs:
+        pred_val (Any): Input parameter.
+        ref_val (Any): Input parameter.
+        field (str): Input parameter.
+    Outputs:
+        bool: Function output value.
+    """
     pred_norm = _normalize_eval_value(pred_val, field)
     ref_norm = _normalize_eval_value(ref_val, field)
 
@@ -1785,7 +2307,16 @@ def _field_equal_tolerant(pred_val: Any, ref_val: Any, field: str) -> bool:
 
 
 def flatten_invoice_payload(parsed: Dict[str, Any]) -> Dict[str, Any]:
-    """Flatten a payload into the canonical invoice schema in a fixed order."""
+    """
+    Flatten a payload into the canonical invoice schema in a fixed order.
+
+    Notes:
+        Standardized docstring style for Donut training utilities.
+    Inputs:
+        parsed (Dict[str, Any]): Input parameter.
+    Outputs:
+        Dict[str, Any]: Function output value.
+    """
     if not isinstance(parsed, dict):
         return {field: None for field in CANONICAL_INVOICE_FIELDS}
 
@@ -1833,10 +2364,29 @@ def flatten_invoice_payload(parsed: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def safe_val(x):
+    """
+    Safe val.
+
+    Notes:
+        Standardized docstring style for Donut training utilities.
+    Inputs:
+        x (Any): Input parameter.
+    Outputs:
+        Any: Function output value.
+    """
     return x if x not in [None, ""] else "NULL"
 
 def build_structured_invoice_text(invoice_payload):
-    """Training/inference target: fixed bracket order matching CANONICAL_INVOICE_FIELDS."""
+    """
+    Training/inference target: fixed bracket order matching CANONICAL_INVOICE_FIELDS.
+
+    Notes:
+        Standardized docstring style for Donut training utilities.
+    Inputs:
+        invoice_payload (Any): Input parameter.
+    Outputs:
+        Any: Function output value.
+    """
     return (
         "<s_invoice>"
         f"[inv_no]={safe_val(invoice_payload['invoice_number'])} | "
@@ -1850,7 +2400,16 @@ def build_structured_invoice_text(invoice_payload):
     )
 
 def build_canonical_invoice_payload(row: pd.Series | Dict[str, Any]) -> Dict[str, Any]:
-    """Build the canonical invoice payload in a fixed field order."""
+    """
+    Build the canonical invoice payload in a fixed field order.
+
+    Notes:
+        Standardized docstring style for Donut training utilities.
+    Inputs:
+        row (pd.Series | Dict[str, Any]): Input parameter.
+    Outputs:
+        Dict[str, Any]: Function output value.
+    """
     payload = {
         "invoice_number": normalize_invoice_field(row.get("invoice_number"), "invoice_number"),
         "invoice_date": normalize_invoice_field(row.get("invoice_date"), "invoice_date"),
@@ -1873,14 +2432,19 @@ def build_donut_pretraining_frame(
     random_state: int = 42,
     augment_factor: int = 1,
 ) -> pd.DataFrame:
-    """Convert labeled data into invoice-only Donut training examples.
+    """
+    Convert labeled data into invoice-only Donut training examples.
 
-    Returns a dataframe with columns:
-    - image_path
-    - target_text
-    - loss_weight
-    - source_idx
-    - augment_id
+    Notes:
+        Standardized docstring style for Donut training utilities.
+    Inputs:
+        ground_truth_df (pd.DataFrame): Input parameter.
+        image_col (str): Input parameter. Defaults to 'original_path'.
+        sample_frac (Optional[float]): Input parameter. Defaults to None.
+        random_state (int): Input parameter. Defaults to 42.
+        augment_factor (int): Input parameter. Defaults to 1.
+    Outputs:
+        pd.DataFrame: Function output value.
     """
     df = ground_truth_df.copy()
     if sample_frac is not None:
@@ -1915,22 +2479,64 @@ def build_donut_pretraining_frame(
     return pd.DataFrame(rows)
 
 def augment_document_image(image: Image.Image) -> Image.Image:
-    """No-op augmentation for the first original-image Donut run."""
+    """
+    No-op augmentation for the first original-image Donut run.
+
+    Notes:
+        Standardized docstring style for Donut training utilities.
+    Inputs:
+        image (Image.Image): Input parameter.
+    Outputs:
+        Image.Image: Function output value.
+    """
     return image
 
 class DonutInvoiceDataset(torch.utils.data.Dataset):
     """PyTorch dataset for invoice-only Donut fine-tuning examples."""
 
     def __init__(self, df: pd.DataFrame, processor: DonutProcessor, max_length: int, augment: bool = False):
+        """
+        Init.
+
+        Notes:
+            Standardized docstring style for Donut training utilities.
+        Inputs:
+            df (pd.DataFrame): Input parameter.
+            processor (DonutProcessor): Input parameter.
+            max_length (int): Input parameter.
+            augment (bool): Input parameter. Defaults to False.
+        Outputs:
+            Any: Function output value.
+        """
         self.df = df.reset_index(drop=True)
         self.processor = processor
         self.max_length = max_length
         self.augment = augment
 
     def __len__(self):
+        """
+        Len.
+
+        Notes:
+            Standardized docstring style for Donut training utilities.
+        Inputs:
+            None.
+        Outputs:
+            Any: Function output value.
+        """
         return len(self.df)
 
     def __getitem__(self, idx):
+        """
+        Getitem.
+
+        Notes:
+            Standardized docstring style for Donut training utilities.
+        Inputs:
+            idx (Any): Input parameter.
+        Outputs:
+            Any: Function output value.
+        """
         row = self.df.iloc[idx]
         image = Image.open(row["image_path"]).convert("RGB")
         image.thumbnail((960, 960), Image.Resampling.LANCZOS)
@@ -1965,6 +2571,16 @@ class DonutInvoiceDataset(torch.utils.data.Dataset):
 
 class DonutDataCollator:
     def __call__(self, features):
+        """
+        Call.
+
+        Notes:
+            Standardized docstring style for Donut training utilities.
+        Inputs:
+            features (Any): Input parameter.
+        Outputs:
+            Any: Function output value.
+        """
         pixel_values = torch.stack([f["pixel_values"] for f in features])
 
         labels = [f["labels"] for f in features]
@@ -1987,6 +2603,19 @@ class WeightedDonutTrainer(Seq2SeqTrainer):
     """Seq2SeqTrainer with per-sample loss weighting for numeric-heavy examples."""
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+        """
+        Compute loss.
+
+        Notes:
+            Standardized docstring style for Donut training utilities.
+        Inputs:
+            model (Any): Input parameter.
+            inputs (Any): Input parameter.
+            return_outputs (Any): Input parameter. Defaults to False.
+            num_items_in_batch (Any): Input parameter. Defaults to None.
+        Outputs:
+            Any: Function output value.
+        """
         loss_weight = inputs.pop("loss_weight", None)
         pixel_values = inputs.pop("pixel_values")
         labels = inputs.pop("labels")
@@ -2005,6 +2634,19 @@ class WeightedDonutTrainer(Seq2SeqTrainer):
         return (loss, outputs) if return_outputs else loss
     
     def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys=None):
+        """
+        Prediction step.
+
+        Notes:
+            Standardized docstring style for Donut training utilities.
+        Inputs:
+            model (Any): Input parameter.
+            inputs (Any): Input parameter.
+            prediction_loss_only (Any): Input parameter.
+            ignore_keys (Any): Input parameter. Defaults to None.
+        Outputs:
+            Any: Function output value.
+        """
         inputs = inputs.copy()
         inputs.pop("loss_weight", None)
 
@@ -2024,9 +2666,28 @@ class WeightedDonutTrainer(Seq2SeqTrainer):
 
 # Validation metrics
 def build_donut_compute_metrics(processor: DonutProcessor):
-    """Create a compute_metrics function for Donut validation."""
+    """
+    Create a compute_metrics function for Donut validation.
+
+    Notes:
+        Standardized docstring style for Donut training utilities.
+    Inputs:
+        processor (DonutProcessor): Input parameter.
+    Outputs:
+        Any: Function output value.
+    """
 
     def compute_metrics(eval_pred):
+        """
+        Compute metrics.
+
+        Notes:
+            Standardized docstring style for Donut training utilities.
+        Inputs:
+            eval_pred (Any): Input parameter.
+        Outputs:
+            Any: Function output value.
+        """
         preds, labels = eval_pred
         if isinstance(preds, tuple):
             preds = preds[0]
@@ -2136,7 +2797,22 @@ def train_donut_invoice_model(
         image_col: str = "original_path",
         augment_factor: int = 1,
     ):
-    """Fine-tune a Donut model on invoice data."""
+    """
+    Fine-tune a Donut model on invoice data.
+
+    Notes:
+        Standardized docstring style for Donut training utilities.
+    Inputs:
+        train_df (pd.DataFrame): Input parameter.
+        val_df (pd.DataFrame): Input parameter.
+        test_df (pd.DataFrame): Input parameter.
+        output_dir (str | Path): Input parameter. Defaults to './donut_model'.
+        config (Optional[DonutFineTuningConfig]): Input parameter. Defaults to None.
+        image_col (str): Input parameter. Defaults to 'original_path'.
+        augment_factor (int): Input parameter. Defaults to 1.
+    Outputs:
+        Any: Function output value.
+    """
     config = config or DonutFineTuningConfig()
     device = resolve_donut_device(config.device)
     train_bs, eval_bs, grad_accum = recommend_donut_batch_sizes(device, config.model_name)

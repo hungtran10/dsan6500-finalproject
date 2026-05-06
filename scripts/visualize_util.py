@@ -20,10 +20,31 @@ DEFAULT_FIELDS: Sequence[str] = (
 
 
 def _get_successful_results(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Get successful results.
+
+    Notes:
+        Docstring standardized for project utility modules.
+    Inputs:
+        results (List[Dict[str, Any]]): Input parameter.
+    Outputs:
+        List[Dict[str, Any]]: Function output value.
+    """
     return [r for r in results if r.get("success")]
 
 
 def _field_extraction_rates(results: List[Dict[str, Any]], fields: Sequence[str]) -> Dict[str, float]:
+    """
+    Field extraction rates.
+
+    Notes:
+        Docstring standardized for project utility modules.
+    Inputs:
+        results (List[Dict[str, Any]]): Input parameter.
+        fields (Sequence[str]): Input parameter.
+    Outputs:
+        Dict[str, float]: Function output value.
+    """
     successful = _get_successful_results(results)
     n = len(successful)
     if n == 0:
@@ -41,6 +62,18 @@ def _field_extraction_rates(results: List[Dict[str, Any]], fields: Sequence[str]
 
 
 def _field_metrics(metrics_df: Optional[pd.DataFrame], fields: Sequence[str], metric_col: str) -> Dict[str, float]:
+    """
+    Field metrics.
+
+    Notes:
+        Docstring standardized for project utility modules.
+    Inputs:
+        metrics_df (Optional[pd.DataFrame]): Input parameter.
+        fields (Sequence[str]): Input parameter.
+        metric_col (str): Input parameter.
+    Outputs:
+        Dict[str, float]: Function output value.
+    """
     if metrics_df is None or metrics_df.empty or metric_col not in metrics_df.columns:
         return {f: np.nan for f in fields}
     df = metrics_df.copy().set_index("field")
@@ -51,6 +84,16 @@ def _field_metrics(metrics_df: Optional[pd.DataFrame], fields: Sequence[str], me
 
 
 def _flatten_layoutlm_token_confidences(results: List[Dict[str, Any]]) -> List[float]:
+    """
+    Flatten layoutlm token confidences.
+
+    Notes:
+        Docstring standardized for project utility modules.
+    Inputs:
+        results (List[Dict[str, Any]]): Input parameter.
+    Outputs:
+        List[float]: Function output value.
+    """
     vals: List[float] = []
     for r in _get_successful_results(results):
         wc = r.get("word_token_confidences")
@@ -60,7 +103,16 @@ def _flatten_layoutlm_token_confidences(results: List[Dict[str, Any]]) -> List[f
 
 
 def _flatten_ocr_token_confidences(results: List[Dict[str, Any]]) -> List[float]:
-    """Per-word OCR confidences; normalized to ~[0, 1] if Tesseract used 0–100 scale."""
+    """
+    Per-word OCR confidences; normalized to ~[0, 1] if Tesseract used 0–100 scale.
+
+    Notes:
+        Docstring standardized for project utility modules.
+    Inputs:
+        results (List[Dict[str, Any]]): Input parameter.
+    Outputs:
+        List[float]: Function output value.
+    """
     vals: List[float] = []
     for r in _get_successful_results(results):
         et = r.get("extracted_text")
@@ -79,6 +131,17 @@ def _resolve_top_left_panel_kind(
     panel_model: Literal["ocr", "layoutlm", "auto"],
     results: List[Dict[str, Any]],
 ) -> Literal["layoutlm_tokens", "ocr_tokens", "ocr_doc_avg"]:
+    """
+    Resolve top left panel kind.
+
+    Notes:
+        Docstring standardized for project utility modules.
+    Inputs:
+        panel_model (Literal['ocr', 'layoutlm', 'auto']): Input parameter.
+        results (List[Dict[str, Any]]): Input parameter.
+    Outputs:
+        Literal['layoutlm_tokens', 'ocr_tokens', 'ocr_doc_avg']: Function output value.
+    """
     if panel_model == "layoutlm":
         if _flatten_layoutlm_token_confidences(results):
             return "layoutlm_tokens"
@@ -98,6 +161,17 @@ def _resolve_top_left_panel_kind(
 
 
 def _field_outcome_counts(metrics_df: Optional[pd.DataFrame], fields: Sequence[str]) -> pd.DataFrame:
+    """
+    Field outcome counts.
+
+    Notes:
+        Docstring standardized for project utility modules.
+    Inputs:
+        metrics_df (Optional[pd.DataFrame]): Input parameter.
+        fields (Sequence[str]): Input parameter.
+    Outputs:
+        pd.DataFrame: Function output value.
+    """
     if metrics_df is None or metrics_df.empty:
         return pd.DataFrame(index=fields, columns=["correct", "incorrect", "missing_pred"]).fillna(0)
 
@@ -134,6 +208,22 @@ def create_analysis_dashboard(
     *,
     panel_model: Literal["ocr", "layoutlm", "auto"] = "auto",
 ) -> Dict[str, Any]:
+    """
+    Create analysis dashboard.
+
+    Notes:
+        Docstring standardized for project utility modules.
+    Inputs:
+        results (List[Dict[str, Any]]): Input parameter.
+        metrics_df (Optional[pd.DataFrame]): Input parameter. Defaults to None.
+        fields (Sequence[str]): Input parameter. Defaults to DEFAULT_FIELDS.
+        title (str): Input parameter. Defaults to 'Invoice Processing Analysis Dashboard'.
+        save_path (Optional[str | Path]): Input parameter. Defaults to None.
+        show (bool): Input parameter. Defaults to True.
+        panel_model (Literal['ocr', 'layoutlm', 'auto']): Input parameter. Defaults to 'auto'.
+    Outputs:
+        Dict[str, Any]: Function output value.
+    """
     successful = _get_successful_results(results)
     failed = [r for r in results if not r.get("success")]
 
@@ -288,6 +378,19 @@ def visualize_sample_results(
     n_samples: int = 3,
     title: str = "Sample OCR Results",
 ) -> None:
+    """
+    Visualize sample results.
+
+    Notes:
+        Docstring standardized for project utility modules.
+    Inputs:
+        results (List[Dict[str, Any]]): Input parameter.
+        visualize_text_fn (Any): Input parameter. Defaults to None.
+        n_samples (int): Input parameter. Defaults to 3.
+        title (str): Input parameter. Defaults to 'Sample OCR Results'.
+    Outputs:
+        None: Function output value.
+    """
     _ = title
     successful = _get_successful_results(results)[:n_samples]
 

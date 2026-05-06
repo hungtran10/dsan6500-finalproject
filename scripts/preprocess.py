@@ -14,8 +14,16 @@ from tqdm import tqdm
 
 def preprocess_csv_files(input_path, output_path, csv_files=None):
     """
-    Function that loads CSVs (single, list, or default batch),
-    combines and extracts data-type enforced data.
+    Function that loads CSVs (single, list, or default batch),.
+
+    Notes:
+        Docstring standardized for project utility modules.
+    Inputs:
+        input_path (Any): Input parameter.
+        output_path (Any): Input parameter.
+        csv_files (Any): Input parameter. Defaults to None.
+    Outputs:
+        Any: Function output value.
     """
 
     input_path = Path(input_path)
@@ -51,6 +59,16 @@ def preprocess_csv_files(input_path, output_path, csv_files=None):
 
     # Extract fields from JSON data
     def extract_fields(js):
+        """
+        Extract fields.
+
+        Notes:
+            Docstring standardized for project utility modules.
+        Inputs:
+            js (Any): Input parameter.
+        Outputs:
+            Any: Function output value.
+        """
         invoice = js.get("invoice", {})
         subtotal = js.get("subtotal", {})
 
@@ -72,6 +90,16 @@ def preprocess_csv_files(input_path, output_path, csv_files=None):
     df.drop_duplicates(subset=["File Name"], inplace=True)
 
     def enforce_invoice_dtypes(df):
+        """
+        Enforce invoice dtypes.
+
+        Notes:
+            Docstring standardized for project utility modules.
+        Inputs:
+            df (Any): Input parameter.
+        Outputs:
+            Any: Function output value.
+        """
         text_cols = ["client_name", "seller_name", "invoice_number"]
         date_cols = ["invoice_date", "due_date"]
 
@@ -109,6 +137,17 @@ def preprocess_csv_files(input_path, output_path, csv_files=None):
             )
 
         def compute_tax_value(tax_val, total_val):
+            """
+            Compute tax value.
+
+            Notes:
+                Docstring standardized for project utility modules.
+            Inputs:
+                tax_val (Any): Input parameter.
+                total_val (Any): Input parameter.
+            Outputs:
+                Any: Function output value.
+            """
             if pd.isna(tax_val):
                 return np.nan
 
@@ -159,6 +198,16 @@ class InvoiceImagePreprocessor:
     """
     
     def __init__(self, output_dir):
+        """
+        Init.
+
+        Notes:
+            Docstring standardized for project utility modules.
+        Inputs:
+            output_dir (Any): Input parameter.
+        Outputs:
+            Any: Function output value.
+        """
         self.output_dir = Path(output_dir)
 
         # Create output directory if doesn't exist
@@ -166,7 +215,15 @@ class InvoiceImagePreprocessor:
         
     def image_preprocessing(self, image_path, save_output=True):
         """
-        Complete invoice preprocessing pipeline with all enhancement steps
+        Complete invoice preprocessing pipeline with all enhancement steps.
+
+        Notes:
+            Docstring standardized for project utility modules.
+        Inputs:
+            image_path (Any): Input parameter.
+            save_output (Any): Input parameter. Defaults to True.
+        Outputs:
+            Any: Function output value.
         """
         try:
             img = cv2.imread(str(image_path))
@@ -219,7 +276,14 @@ class InvoiceImagePreprocessor:
 
     def deskew_image(self, image):
         """
-        Detect and correct skew in the image using Hough line detection
+        Detect and correct skew in the image using Hough line detection.
+
+        Notes:
+            Docstring standardized for project utility modules.
+        Inputs:
+            image (Any): Input parameter.
+        Outputs:
+            Any: Function output value.
         """
         try:
             edges = cv2.Canny(image, 50, 150, apertureSize=3)
@@ -252,7 +316,14 @@ class InvoiceImagePreprocessor:
 
     def remove_borders(self, image):
         """
-        Remove document borders and edge artifacts
+        Remove document borders and edge artifacts.
+
+        Notes:
+            Docstring standardized for project utility modules.
+        Inputs:
+            image (Any): Input parameter.
+        Outputs:
+            Any: Function output value.
         """
         try:
             contours, _ = cv2.findContours(image, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -277,7 +348,16 @@ class InvoiceImagePreprocessor:
 
     def process_images(self, csv_path, image_folder_path, batch_size=50):
         """
-        Process entire image folder with progress tracking
+        Process entire image folder with progress tracking.
+
+        Notes:
+            Docstring standardized for project utility modules.
+        Inputs:
+            csv_path (Any): Input parameter.
+            image_folder_path (Any): Input parameter.
+            batch_size (Any): Input parameter. Defaults to 50.
+        Outputs:
+            Any: Function output value.
         """
 
         # Import and clean CSV of all files
@@ -348,7 +428,15 @@ class InvoiceImagePreprocessor:
     
     def visualize_sample_results(self, results_df, n_samples=3):
         """
-        Visualize sample preprocessing results
+        Visualize sample preprocessing results.
+
+        Notes:
+            Docstring standardized for project utility modules.
+        Inputs:
+            results_df (Any): Input parameter.
+            n_samples (Any): Input parameter. Defaults to 3.
+        Outputs:
+            Any: Function output value.
         """
         successful_results = results_df[results_df['status'] == 'success'].head(n_samples)
         

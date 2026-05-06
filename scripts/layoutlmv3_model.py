@@ -40,6 +40,16 @@ DEFAULT_FIELDS: list[str] = [
 
 
 def _xywh_to_xyxy(bbox_xywh: tuple[int, int, int, int]) -> tuple[int, int, int, int]:
+    """
+    Xywh to xyxy function.
+
+    Notes:
+        Standardized docstring for LayoutLMv3 pipeline code.
+    Inputs:
+        bbox_xywh (tuple[int, int, int, int]): Input parameter.
+    Outputs:
+        tuple[int, int, int, int]: Function output value.
+    """
     x, y, w, h = bbox_xywh
     return x, y, x + w, y + h
 
@@ -50,11 +60,35 @@ def _normalize_box_1000(
     width: int,
     height: int,
 ) -> list[int]:
+    """
+    Normalize box 1000 function.
+
+    Notes:
+        Standardized docstring for LayoutLMv3 pipeline code.
+    Inputs:
+        box_xyxy (tuple[int, int, int, int]): Input parameter.
+        width (int): Input parameter.
+        height (int): Input parameter.
+    Outputs:
+        list[int]: Function output value.
+    """
     x0, y0, x1, y1 = box_xyxy
     if width <= 0 or height <= 0:
         return [0, 0, 0, 0]
 
     def clamp(v: int, low: int, high: int) -> int:
+        """
+        Clamp function.
+
+        Notes:
+            Standardized docstring for LayoutLMv3 pipeline code.
+        Inputs:
+            v (int): Input parameter.
+            low (int): Input parameter.
+            high (int): Input parameter.
+        Outputs:
+            int: Function output value.
+        """
         return max(low, min(int(v), high))
 
     x0n = clamp(round(1000 * x0 / width), 0, 1000)
@@ -78,7 +112,19 @@ def ocr_words_from_image(
     psm: int = 6,
     extra_config: str = "",
 ) -> list[OcrWord]:
+    """
+    Extract word-level OCR records from a page image.
 
+    Notes:
+        Uses Tesseract `image_to_data` and filters tokens by confidence.
+    Inputs:
+        image (np.ndarray): Grayscale or color image array.
+        confidence_threshold (int, optional): Minimum token confidence to keep.
+        psm (int, optional): Tesseract page-segmentation mode.
+        extra_config (str, optional): Additional Tesseract config flags.
+    Outputs:
+        list[OcrWord]: OCR words with text, bbox, and confidence.
+    """
     config = f"--oem 3 --psm {psm} {extra_config}".strip()
     ocr_data = pytesseract.image_to_data(
         image,
@@ -115,6 +161,17 @@ def ocr_words_from_image(
 
 
 def _token_norm_for_field(token: str, field: str) -> str:
+    """
+    Token norm for field function.
+
+    Notes:
+        Standardized docstring for LayoutLMv3 pipeline code.
+    Inputs:
+        token (str): Input parameter.
+        field (str): Input parameter.
+    Outputs:
+        str: Function output value.
+    """
     token = token.strip()
     if not token:
         return ""
@@ -142,6 +199,17 @@ def _token_norm_for_field(token: str, field: str) -> str:
 
 
 def _value_tokens_for_field(value: Any, field: str) -> list[str]:
+    """
+    Value tokens for field function.
+
+    Notes:
+        Standardized docstring for LayoutLMv3 pipeline code.
+    Inputs:
+        value (Any): Input parameter.
+        field (str): Input parameter.
+    Outputs:
+        list[str]: Function output value.
+    """
     if value is None or (isinstance(value, float) and np.isnan(value)):
         return []
 
@@ -164,6 +232,17 @@ def _value_tokens_for_field(value: Any, field: str) -> list[str]:
 
 
 def _find_exact_subsequence(haystack: list[str], needle: list[str]) -> tuple[int, int] | None:
+    """
+    Find exact subsequence function.
+
+    Notes:
+        Standardized docstring for LayoutLMv3 pipeline code.
+    Inputs:
+        haystack (list[str]): Input parameter.
+        needle (list[str]): Input parameter.
+    Outputs:
+        tuple[int, int] | None: Function output value.
+    """
     if not haystack or not needle:
         return None
     n = len(needle)
@@ -180,6 +259,19 @@ def _find_fuzzy_window(
     min_ratio: float = 0.92,
     window_slack: int = 2,
 ) -> tuple[int, int] | None:
+    """
+    Find fuzzy window function.
+
+    Notes:
+        Standardized docstring for LayoutLMv3 pipeline code.
+    Inputs:
+        haystack (list[str]): Input parameter.
+        needle (list[str]): Input parameter.
+        min_ratio (float, optional): Input parameter. Defaults to 0.92.
+        window_slack (int, optional): Input parameter. Defaults to 2.
+    Outputs:
+        tuple[int, int] | None: Function output value.
+    """
     try:
         from rapidfuzz.fuzz import ratio as rf_ratio  # type: ignore
     except Exception:  # pragma: no cover
@@ -225,8 +317,18 @@ def _find_anchor_guided_window(
     """
     Anchor-guided matcher used for weak labels of party names.
 
-    It searches windows after anchor terms like "seller"/"client" and picks the
-    span with highest string similarity to the ground-truth target.
+    Notes:
+        Standardized docstring for LayoutLMv3 pipeline code.
+    Inputs:
+        haystack_raw (list[str]): Input parameter.
+        haystack_norm (list[str]): Input parameter.
+        needle_norm (list[str]): Input parameter.
+        anchor_terms (list[str]): Input parameter.
+        min_ratio (float, optional): Input parameter. Defaults to 0.72.
+        max_tokens_after_anchor (int, optional): Input parameter. Defaults to 28.
+        window_slack (int, optional): Input parameter. Defaults to 2.
+    Outputs:
+        tuple[int, int] | None: Function output value.
     """
     if not haystack_norm or not needle_norm:
         return None
@@ -289,7 +391,15 @@ def _find_anchor_guided_window(
 def _is_party_name_span_quality(words: list[str], s: int, e: int) -> bool:
     """
     Keep seller/client weak labels compact and name-like.
-    Reject spans that look like IDs/addresses/metadata.
+
+    Notes:
+        Standardized docstring for LayoutLMv3 pipeline code.
+    Inputs:
+        words (list[str]): Input parameter.
+        s (int): Input parameter.
+        e (int): Input parameter.
+    Outputs:
+        bool: Function output value.
     """
     if s < 0 or e > len(words) or s >= e:
         return False
@@ -318,13 +428,29 @@ def _is_party_name_span_quality(words: list[str], s: int, e: int) -> bool:
 
 
 def _money_tol(v: float) -> float:
+    """
+    Money tol function.
+
+    Notes:
+        Standardized docstring for LayoutLMv3 pipeline code.
+    Inputs:
+        v (float): Input parameter.
+    Outputs:
+        float: Function output value.
+    """
     return max(0.05, abs(v) * 0.01)
 
 
 def _line_word_indices_from_ocr(ocr_words: list[OcrWord]) -> list[list[int]]:
     """
     Cluster OCR words into reading-order lines using y-center proximity.
-    Returns line groups as lists of original word indices.
+
+    Notes:
+        Standardized docstring for LayoutLMv3 pipeline code.
+    Inputs:
+        ocr_words (list[OcrWord]): Input parameter.
+    Outputs:
+        list[list[int]]: Function output value.
     """
     if not ocr_words:
         return []
@@ -369,7 +495,14 @@ def _line_word_indices_from_ocr(ocr_words: list[OcrWord]) -> list[list[int]]:
 def _money_candidates_for_line(words: list[str], line_idxs: list[int]) -> list[tuple[float, int, int]]:
     """
     Produce money candidates from a line as (value, start_idx, end_idx_exclusive).
-    Handles both single-token and split-token amounts like "6 579,11".
+
+    Notes:
+        Standardized docstring for LayoutLMv3 pipeline code.
+    Inputs:
+        words (list[str]): Input parameter.
+        line_idxs (list[int]): Input parameter.
+    Outputs:
+        list[tuple[float, int, int]]: Function output value.
     """
     candidates: list[tuple[float, int, int]] = []
     seen: set[tuple[float, int, int]] = set()
@@ -377,6 +510,18 @@ def _money_candidates_for_line(words: list[str], line_idxs: list[int]) -> list[t
         return candidates
 
     def add(val: float, s: int, e: int):
+        """
+        Add function.
+
+        Notes:
+            Standardized docstring for LayoutLMv3 pipeline code.
+        Inputs:
+            val (float): Input parameter.
+            s (int): Input parameter.
+            e (int): Input parameter.
+        Outputs:
+            Any: Function output value.
+        """
         key = (round(val, 4), s, e)
         if key in seen:
             return
@@ -411,7 +556,16 @@ def _line_arithmetic_money_spans(
 ) -> dict[str, tuple[int, int]]:
     """
     Infer money spans from line candidates using GT proximity + arithmetic consistency.
-    Returns spans for any of {tax, net_worth, total_amount} that can be confidently assigned.
+
+    Notes:
+        Standardized docstring for LayoutLMv3 pipeline code.
+    Inputs:
+        words (list[str]): Input parameter.
+        ocr_words (list[OcrWord] | None): Input parameter.
+        ground_truth_row (pd.Series): Input parameter.
+        occupied (list[bool]): Input parameter.
+    Outputs:
+        dict[str, tuple[int, int]]: Function output value.
     """
     if not ocr_words:
         return {}
@@ -487,9 +641,17 @@ def weak_label_words_bio(
     """
     Weakly label OCR *words* with BIO tags by matching to ground-truth values.
 
-    Returns:
-      - labels: one label per input word
-      - spans: dict field -> (start,end) matched span in word indices (end exclusive) or None
+    Notes:
+        Prioritizes non-money fields first, then resolves money fields with
+        arithmetic/anchor heuristics to reduce overlap conflicts.
+    Inputs:
+        words (list[str]): OCR token sequence for one page.
+        ground_truth_row (pd.Series): Ground-truth row containing invoice fields.
+        fields (Iterable[str], optional): Canonical fields to weak-label.
+        ocr_words (list[OcrWord] | None, optional): OCR objects for geometry-aware heuristics.
+    Outputs:
+        tuple[list[str], dict[str, tuple[int, int] | None]]:
+            BIO labels per token and matched span per field.
     """
 
     fields = list(fields)
@@ -504,6 +666,18 @@ def weak_label_words_bio(
     other_fields = [f for f in fields if f not in set(non_money_fields + money_fields)]
 
     def assign_span(field: str, s: int, e: int) -> bool:
+        """
+        Assign span function.
+
+        Notes:
+            Standardized docstring for LayoutLMv3 pipeline code.
+        Inputs:
+            field (str): Input parameter.
+            s (int): Input parameter.
+            e (int): Input parameter.
+        Outputs:
+            bool: Function output value.
+        """
         if s >= e or any(occupied[s:e]):
             return False
         spans[field] = (s, e)
@@ -610,6 +784,18 @@ class LayoutLMv3InvoiceDatasetBuilder:
         output_dir: str | Path,
         ocr_confidence_threshold: int = 30,
     ):
+        """
+        Initialize a weak-label dataset builder.
+
+        Notes:
+            This builder converts merged ground-truth/image rows into LayoutLMv3
+            training examples with OCR words, normalized boxes, and BIO labels.
+        Inputs:
+            output_dir (str | Path): Directory for saved example files.
+            ocr_confidence_threshold (int, optional): Minimum OCR confidence for tokens.
+        Outputs:
+            None: Stores builder configuration on the instance.
+        """
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.ocr_confidence_threshold = ocr_confidence_threshold
@@ -623,6 +809,21 @@ class LayoutLMv3InvoiceDatasetBuilder:
         fields: Iterable[str] = DEFAULT_FIELDS,
         max_examples: int | None = None,
     ) -> list[dict[str, Any]]:
+        """
+        Build weakly labeled LayoutLMv3 training examples.
+
+        Notes:
+            Each output example includes OCR words, 0-1000 normalized boxes,
+            token-level BIO labels, and matching diagnostics.
+        Inputs:
+            merged_df (pd.DataFrame): Joined dataframe with paths + ground truth.
+            image_col (str, optional): Column containing processed image paths.
+            key_col (str, optional): Column used as processed-file key.
+            fields (Iterable[str], optional): Fields to weak-label.
+            max_examples (int | None, optional): Optional cap for quick experiments.
+        Outputs:
+            list[dict[str, Any]]: Weakly labeled examples for training.
+        """
         fields = list(fields)
 
         examples: list[dict[str, Any]] = []
@@ -699,6 +900,17 @@ class LayoutLMv3InvoiceDatasetBuilder:
         return examples
 
     def save_jsonl(self, examples: list[dict[str, Any]], filename: str = "layoutlmv3_weak_labels.jsonl") -> Path:
+        """
+        Save generated training examples to JSONL.
+
+        Notes:
+            Writes one example dictionary per line for reproducible dataset snapshots.
+        Inputs:
+            examples (list[dict[str, Any]]): Example records from `build_examples`.
+            filename (str, optional): Output filename under builder output directory.
+        Outputs:
+            Path: Absolute path to the written JSONL file.
+        """
         out = self.output_dir / filename
         with out.open("w", encoding="utf-8") as f:
             for ex in examples:
@@ -719,6 +931,16 @@ class LayoutLMv3InvoiceTokenClassifier:
     RUNTIME_VERSION = "layoutlmv3-name-resolver-2026-04-28-final"
 
     def __init__(self):
+        """
+        Initialize an empty LayoutLMv3 token-classification wrapper.
+
+        Notes:
+            Model/processor are loaded by `train()` or `reload_model()`.
+        Inputs:
+            None.
+        Outputs:
+            None: Initializes runtime flags and placeholders.
+        """
         self.model = None
         self.processor = None
         self.id2label: dict[int, str] | None = None
@@ -734,6 +956,16 @@ class LayoutLMv3InvoiceTokenClassifier:
 
     @staticmethod
     def build_label_maps(fields: Iterable[str] = DEFAULT_FIELDS) -> tuple[dict[str, int], dict[int, str]]:
+        """
+        Build BIO label-id mappings from canonical fields.
+
+        Notes:
+            Produces `O`, `B-FIELD`, and `I-FIELD` labels for each field.
+        Inputs:
+            fields (Iterable[str], optional): Fields included in token labeling.
+        Outputs:
+            tuple[dict[str, int], dict[int, str]]: (`label2id`, `id2label`) maps.
+        """
         fields = list(fields)
         labels = ["O"]
         for f in fields:
@@ -764,11 +996,25 @@ class LayoutLMv3InvoiceTokenClassifier:
         """
         Fine-tune LayoutLMv3 for token classification using weak BIO labels.
 
-        `train_examples` / `eval_examples` expected schema (from LayoutLMv3InvoiceDatasetBuilder):
-          - image_path: str
-          - words: list[str]
-          - boxes: list[list[int]]  # normalized 0..1000 xyxy
-          - labels: list[str]       # BIO labels per word
+        Notes:
+            Encodes OCR words/boxes with `LayoutLMv3Processor`, trains with
+            Hugging Face `Trainer`, then saves model, processor, and label maps.
+        Inputs:
+            train_examples (list[dict[str, Any]]): Weakly labeled training examples.
+            eval_examples (list[dict[str, Any]] | None): Optional evaluation examples.
+            output_dir (str | Path): Directory for model artifacts.
+            fields (Iterable[str], optional): Fields used to build BIO label space.
+            base_model (str, optional): Base LayoutLMv3 checkpoint.
+            max_length (int, optional): Max token length per encoded sample.
+            per_device_train_batch_size (int, optional): Train batch size per device.
+            per_device_eval_batch_size (int, optional): Eval batch size per device.
+            num_train_epochs (int, optional): Number of fine-tuning epochs.
+            learning_rate (float, optional): Optimizer learning rate.
+            logging_steps (int, optional): Logging/save/eval step interval.
+            save_total_limit (int, optional): Number of retained checkpoints.
+            seed (int, optional): Random seed.
+        Outputs:
+            Path: Output directory containing the trained checkpoint.
         """
 
         set_seed(seed)
@@ -787,6 +1033,16 @@ class LayoutLMv3InvoiceTokenClassifier:
         )
 
         def encode_example(ex: dict[str, Any]) -> dict[str, torch.Tensor]:
+            """
+            Encode example function.
+
+            Notes:
+                Standardized docstring for LayoutLMv3 pipeline code.
+            Inputs:
+                ex (dict[str, Any]): Input parameter.
+            Outputs:
+                dict[str, torch.Tensor]: Function output value.
+            """
             image = Image.open(ex["image_path"]).convert("RGB")
             word_labels = [self.label2id.get(l, 0) for l in ex["labels"]]
 
@@ -806,12 +1062,42 @@ class LayoutLMv3InvoiceTokenClassifier:
 
         class _TorchDataset(torch.utils.data.Dataset):
             def __init__(self, examples: list[dict[str, Any]]):
+                """
+                Init function.
+
+                Notes:
+                    Standardized docstring for LayoutLMv3 pipeline code.
+                Inputs:
+                    examples (list[dict[str, Any]]): Input parameter.
+                Outputs:
+                    Any: Function output value.
+                """
                 self.examples = examples
 
             def __len__(self):
+                """
+                Len function.
+
+                Notes:
+                    Standardized docstring for LayoutLMv3 pipeline code.
+                Inputs:
+                    None.
+                Outputs:
+                    Any: Function output value.
+                """
                 return len(self.examples)
 
             def __getitem__(self, idx):
+                """
+                Getitem function.
+
+                Notes:
+                    Standardized docstring for LayoutLMv3 pipeline code.
+                Inputs:
+                    idx (Any): Input parameter.
+                Outputs:
+                    Any: Function output value.
+                """
                 return encode_example(self.examples[idx])
 
         train_ds = _TorchDataset(train_examples)
@@ -820,6 +1106,16 @@ class LayoutLMv3InvoiceTokenClassifier:
         def compute_metrics(eval_pred):
             # Optional seqeval; training still works without it.
 
+            """
+            Compute metrics function.
+
+            Notes:
+                Standardized docstring for LayoutLMv3 pipeline code.
+            Inputs:
+                eval_pred (Any): Input parameter.
+            Outputs:
+                Any: Function output value.
+            """
             logits, labels = eval_pred
             preds = np.argmax(logits, axis=-1)
 
@@ -902,6 +1198,16 @@ class LayoutLMv3InvoiceTokenClassifier:
 
     def reload_model(self, model_dir: str | Path):
 
+        """
+        Reload a trained LayoutLMv3 model and label maps from disk.
+
+        Notes:
+            Falls back to model config label mappings when `label_map.json` is absent.
+        Inputs:
+            model_dir (str | Path): Directory containing saved model artifacts.
+        Outputs:
+            LayoutLMv3InvoiceTokenClassifier: Self for chaining.
+        """
         model_dir = Path(model_dir)
         self.processor = LayoutLMv3Processor.from_pretrained(model_dir, apply_ocr=False)
         self.model = LayoutLMv3ForTokenClassification.from_pretrained(model_dir)
@@ -922,10 +1228,14 @@ class LayoutLMv3InvoiceTokenClassifier:
         self, *, image_path: str | Path
     ) -> tuple[list[str], list[str], list[float], list[float], list[float]]:
         """
-        Returns:
-          words, predicted_label_per_word, word_y_center_px per word,
-          word_x_center_norm (0..1) per word,
-          per-word mean max-softmax confidence (over WordPiece tokens mapped to each word).
+        Returns:.
+
+        Notes:
+            Standardized docstring for LayoutLMv3 pipeline code.
+        Inputs:
+            image_path (str | Path): Input parameter.
+        Outputs:
+            tuple[list[str], list[str], list[float], list[float], list[float]]: Function output value.
         """
         if self.model is None or self.processor is None:
             raise ValueError("Model not loaded. Call train() or reload_model().")
@@ -1023,11 +1333,32 @@ class LayoutLMv3InvoiceTokenClassifier:
 
     @staticmethod
     def _entities_from_word_labels(words: list[str], labels: list[str]) -> dict[str, list[str]]:
+        """
+        Entities from word labels function.
+
+        Notes:
+            Standardized docstring for LayoutLMv3 pipeline code.
+        Inputs:
+            words (list[str]): Input parameter.
+            labels (list[str]): Input parameter.
+        Outputs:
+            dict[str, list[str]]: Function output value.
+        """
         entities: dict[str, list[str]] = {}
         cur_field: str | None = None
         cur_tokens: list[str] = []
 
         def flush():
+            """
+            Flush function.
+
+            Notes:
+                Standardized docstring for LayoutLMv3 pipeline code.
+            Inputs:
+                None.
+            Outputs:
+                Any: Function output value.
+            """
             nonlocal cur_field, cur_tokens
             if cur_field and cur_tokens:
                 entities.setdefault(cur_field, []).append(" ".join(cur_tokens).strip())
@@ -1057,6 +1388,14 @@ class LayoutLMv3InvoiceTokenClassifier:
     ) -> list[dict[str, Any]]:
         """
         Return extracted entity spans with token boundaries.
+
+        Notes:
+            Standardized docstring for LayoutLMv3 pipeline code.
+        Inputs:
+            words (list[str]): Input parameter.
+            labels (list[str]): Input parameter.
+        Outputs:
+            list[dict[str, Any]]: Function output value.
         """
         spans: list[dict[str, Any]] = []
         cur_field: str | None = None
@@ -1064,6 +1403,16 @@ class LayoutLMv3InvoiceTokenClassifier:
         cur_start: int | None = None
 
         def flush(end_idx: int):
+            """
+            Flush function.
+
+            Notes:
+                Standardized docstring for LayoutLMv3 pipeline code.
+            Inputs:
+                end_idx (int): Input parameter.
+            Outputs:
+                Any: Function output value.
+            """
             nonlocal cur_field, cur_tokens, cur_start
             if cur_field and cur_tokens and cur_start is not None:
                 spans.append(
@@ -1097,6 +1446,17 @@ class LayoutLMv3InvoiceTokenClassifier:
 
     @staticmethod
     def _find_anchor_positions(words: list[str], anchor: str) -> list[int]:
+        """
+        Find anchor positions function.
+
+        Notes:
+            Standardized docstring for LayoutLMv3 pipeline code.
+        Inputs:
+            words (list[str]): Input parameter.
+            anchor (str): Input parameter.
+        Outputs:
+            list[int]: Function output value.
+        """
         anchor = (normalize_text(anchor) or anchor).lower()
         pos: list[int] = []
         for i, w in enumerate(words):
@@ -1117,7 +1477,18 @@ class LayoutLMv3InvoiceTokenClassifier:
     ) -> str | None:
         """
         Prefer entity spans that are close to the corresponding section anchor.
-        ``anchor`` may be a single token or a tuple (e.g. seller/vendor/supplier for seller_name).
+
+        Notes:
+            Standardized docstring for LayoutLMv3 pipeline code.
+        Inputs:
+            words (list[str]): Input parameter.
+            spans (list[dict[str, Any]]): Input parameter.
+            field (str): Input parameter.
+            anchor (str | tuple[str, ...]): Input parameter.
+            word_x_center (list[float] | None, optional): Input parameter. Defaults to None.
+            expected_side (str | None, optional): Input parameter. Defaults to None.
+        Outputs:
+            str | None: Function output value.
         """
         candidates = [s for s in spans if s.get("field") == field and str(s.get("text", "")).strip()]
         if not candidates:
@@ -1133,6 +1504,16 @@ class LayoutLMv3InvoiceTokenClassifier:
             return ranked[0]["text"] if ranked else None
 
         def rank_key(c: dict[str, Any]) -> tuple[float, float, int, float]:
+            """
+            Rank key function.
+
+            Notes:
+                Standardized docstring for LayoutLMv3 pipeline code.
+            Inputs:
+                c (dict[str, Any]): Input parameter.
+            Outputs:
+                tuple[float, float, int, float]: Function output value.
+            """
             start = int(c.get("start", 10**9))
             # prefer spans after anchor; if before, penalize heavily via distance bump
             dists = []
@@ -1165,8 +1546,15 @@ class LayoutLMv3InvoiceTokenClassifier:
         word_x_center: list[float] | None = None,
     ) -> tuple[str | None, str | None, dict[str, Any]]:
         """
-        Fast path for layouts like: Seller: Client: <seller_name> <client_name>
-        where both labels appear on one line and names immediately follow.
+        Fast path for layouts like: Seller: Client: <seller_name> <client_name>.
+
+        Notes:
+            Standardized docstring for LayoutLMv3 pipeline code.
+        Inputs:
+            words (list[str]): Input parameter.
+            word_x_center (list[float] | None, optional): Input parameter. Defaults to None.
+        Outputs:
+            tuple[str | None, str | None, dict[str, Any]]: Function output value.
         """
         norm_words = [normalize_text(w) or "" for w in words]
         seller_pos = self._anchor_word_positions(norm_words, "seller")
@@ -1249,10 +1637,30 @@ class LayoutLMv3InvoiceTokenClassifier:
     @staticmethod
     def _summary_arithmetic_tol(total_amount: float) -> float:
         # Allow small OCR/rounding noise while enforcing monetary consistency.
+        """
+        Summary arithmetic tol function.
+
+        Notes:
+            Standardized docstring for LayoutLMv3 pipeline code.
+        Inputs:
+            total_amount (float): Input parameter.
+        Outputs:
+            float: Function output value.
+        """
         return max(0.03, abs(total_amount) * 0.01)
 
     @staticmethod
     def _looks_like_client_stop_line(txt: str) -> bool:
+        """
+        Looks like client stop line function.
+
+        Notes:
+            Standardized docstring for LayoutLMv3 pipeline code.
+        Inputs:
+            txt (str): Input parameter.
+        Outputs:
+            bool: Function output value.
+        """
         t = normalize_text(txt)
         if not t:
             return True
@@ -1275,6 +1683,13 @@ class LayoutLMv3InvoiceTokenClassifier:
     def _score_name_candidate(txt: str) -> float:
         """
         Score how likely a span is an organization/person name vs address/id noise.
+
+        Notes:
+            Standardized docstring for LayoutLMv3 pipeline code.
+        Inputs:
+            txt (str): Input parameter.
+        Outputs:
+            float: Function output value.
         """
         t = txt.strip()
         if not t:
@@ -1332,11 +1747,16 @@ class LayoutLMv3InvoiceTokenClassifier:
         self, words: list[str], *, anchor: str, min_score: float = 18.0
     ) -> str | None:
         """
-        Fallback heuristic for blocks like:
-          Client:
-          ClientName
-          Address...
-          Tax ID: ...
+        Fallback heuristic for blocks like:.
+
+        Notes:
+            Standardized docstring for LayoutLMv3 pipeline code.
+        Inputs:
+            words (list[str]): Input parameter.
+            anchor (str): Input parameter.
+            min_score (float, optional): Input parameter. Defaults to 18.0.
+        Outputs:
+            str | None: Function output value.
         """
         if not words:
             return None
@@ -1366,7 +1786,17 @@ class LayoutLMv3InvoiceTokenClassifier:
 
     @staticmethod
     def _anchor_word_positions(norm_words: list[str], anchor: str) -> list[int]:
-        """Indices where OCR token equals anchor (case/normalization tolerant)."""
+        """
+        Indices where OCR token equals anchor (case/normalization tolerant).
+
+        Notes:
+            Standardized docstring for LayoutLMv3 pipeline code.
+        Inputs:
+            norm_words (list[str]): Input parameter.
+            anchor (str): Input parameter.
+        Outputs:
+            list[int]: Function output value.
+        """
         anchor_norm = (normalize_text(anchor) or anchor).lower().rstrip(":")
         out: list[int] = []
         for idx, nw in enumerate(norm_words):
@@ -1390,8 +1820,21 @@ class LayoutLMv3InvoiceTokenClassifier:
     ) -> str | None:
         """
         Token-level fallback for OCR outputs where line breaks are unavailable.
-        Finds `anchor` token (e.g. Seller/Client) and extracts the nearest
-        name-like token span before hard stop markers (Tax ID, IBAN, etc.).
+
+        Notes:
+            Standardized docstring for LayoutLMv3 pipeline code.
+        Inputs:
+            words (list[str]): Input parameter.
+            anchor (str): Input parameter.
+            min_score (float, optional): Input parameter. Defaults to 18.0.
+            max_tokens_after_anchor (int, optional): Input parameter. Defaults to 25.
+            max_span_tokens (int, optional): Input parameter. Defaults to 4.
+            prefer_nearest (bool, optional): Input parameter. Defaults to False.
+            word_y_center (list[float] | None, optional): Input parameter. Defaults to None.
+            word_x_center (list[float] | None, optional): Input parameter. Defaults to None.
+            seller_boundary_stops (bool, optional): Input parameter. Defaults to True.
+        Outputs:
+            str | None: Function output value.
         """
         if not words:
             return None
@@ -1490,11 +1933,31 @@ class LayoutLMv3InvoiceTokenClassifier:
             stop_tokens |= {"client", "bill", "ship", "buyer"}
 
         def _norm_alnum(tok: str) -> str:
+            """
+            Norm alnum function.
+
+            Notes:
+                Standardized docstring for LayoutLMv3 pipeline code.
+            Inputs:
+                tok (str): Input parameter.
+            Outputs:
+                str: Function output value.
+            """
             return re.sub(r"[^a-z0-9]", "", (tok or "").lower())
 
         stop_norm = {_norm_alnum(t) for t in stop_tokens}
 
         def is_stop_token(tok: str) -> bool:
+            """
+            Is stop token function.
+
+            Notes:
+                Standardized docstring for LayoutLMv3 pipeline code.
+            Inputs:
+                tok (str): Input parameter.
+            Outputs:
+                bool: Function output value.
+            """
             if tok in stop_tokens:
                 return True
             return _norm_alnum(tok) in stop_norm
@@ -1506,6 +1969,17 @@ class LayoutLMv3InvoiceTokenClassifier:
         peer_section_cores = frozenset({"seller", "client", "vendor", "supplier"})
 
         def _skip_peer_section_labels(scan: int, window_end: int) -> int:
+            """
+            Skip peer section labels function.
+
+            Notes:
+                Standardized docstring for LayoutLMv3 pipeline code.
+            Inputs:
+                scan (int): Input parameter.
+                window_end (int): Input parameter.
+            Outputs:
+                int: Function output value.
+            """
             k = scan
             while k < window_end:
                 core = _norm_alnum(norm_words[k])
@@ -1515,6 +1989,16 @@ class LayoutLMv3InvoiceTokenClassifier:
             return k
 
         def _token_is_anchor(tok_norm: str) -> bool:
+            """
+            Token is anchor function.
+
+            Notes:
+                Standardized docstring for LayoutLMv3 pipeline code.
+            Inputs:
+                tok_norm (str): Input parameter.
+            Outputs:
+                bool: Function output value.
+            """
             if not tok_norm:
                 return False
             if tok_norm in {anchor_norm, f"{anchor_norm}:"}:
@@ -1635,6 +2119,19 @@ class LayoutLMv3InvoiceTokenClassifier:
     ) -> list[dict[str, Any]]:
         """
         Enumerate name-like candidate spans after anchors, for paired seller/client resolve.
+
+        Notes:
+            Standardized docstring for LayoutLMv3 pipeline code.
+        Inputs:
+            words (list[str]): Input parameter.
+            anchor_terms (tuple[str, ...]): Input parameter.
+            min_score (float): Input parameter.
+            max_tokens_after_anchor (int): Input parameter.
+            max_span_tokens (int): Input parameter.
+            word_x_center (list[float] | None, optional): Input parameter. Defaults to None.
+            expected_side (str | None, optional): Input parameter. Defaults to None.
+        Outputs:
+            list[dict[str, Any]]: Function output value.
         """
         if not words:
             return []
@@ -1657,11 +2154,31 @@ class LayoutLMv3InvoiceTokenClassifier:
             stop_tokens |= {"seller", "vendor", "supplier"}
 
         def _norm_alnum(tok: str) -> str:
+            """
+            Norm alnum function.
+
+            Notes:
+                Standardized docstring for LayoutLMv3 pipeline code.
+            Inputs:
+                tok (str): Input parameter.
+            Outputs:
+                str: Function output value.
+            """
             return re.sub(r"[^a-z0-9]", "", (tok or "").lower())
 
         stop_norm = {_norm_alnum(t) for t in stop_tokens}
 
         def is_stop(tok: str) -> bool:
+            """
+            Is stop function.
+
+            Notes:
+                Standardized docstring for LayoutLMv3 pipeline code.
+            Inputs:
+                tok (str): Input parameter.
+            Outputs:
+                bool: Function output value.
+            """
             return tok in stop_tokens or _norm_alnum(tok) in stop_norm
 
         cands: list[dict[str, Any]] = []
@@ -1719,7 +2236,14 @@ class LayoutLMv3InvoiceTokenClassifier:
     ) -> tuple[str | None, str | None, dict[str, Any]]:
         """
         Jointly resolve seller/client by selecting a non-overlapping candidate pair.
-        Helps avoid swapped names when fallback dominates on held-out docs.
+
+        Notes:
+            Standardized docstring for LayoutLMv3 pipeline code.
+        Inputs:
+            words (list[str]): Input parameter.
+            word_x_center (list[float] | None, optional): Input parameter. Defaults to None.
+        Outputs:
+            tuple[str | None, str | None, dict[str, Any]]: Function output value.
         """
         seller_cands = self._enumerate_anchor_party_candidates(
             words,
@@ -1792,8 +2316,18 @@ class LayoutLMv3InvoiceTokenClassifier:
         max_span_tokens: int = 8,
     ) -> str | None:
         """
-        Last resort when no Seller/Vendor anchor appears in OCR: pick the strongest
-        name-like span lying in the top vertical band (seller blocks are usually high).
+        Last resort when no Seller/Vendor anchor appears in OCR: pick the strongest.
+
+        Notes:
+            Standardized docstring for LayoutLMv3 pipeline code.
+        Inputs:
+            words (list[str]): Input parameter.
+            word_y_center (list[float] | None): Input parameter.
+            band_frac (float, optional): Input parameter. Defaults to 0.22.
+            min_score (float, optional): Input parameter. Defaults to 15.0.
+            max_span_tokens (int, optional): Input parameter. Defaults to 8.
+        Outputs:
+            str | None: Function output value.
         """
         if not words or not word_y_center or len(words) != len(word_y_center):
             return None
@@ -1848,7 +2382,16 @@ class LayoutLMv3InvoiceTokenClassifier:
 
     @staticmethod
     def _looks_like_city_state_address_line(txt: str) -> bool:
-        """Reject OCR lines that look like City, ST rather than firm names."""
+        """
+        Reject OCR lines that look like City, ST rather than firm names.
+
+        Notes:
+            Standardized docstring for LayoutLMv3 pipeline code.
+        Inputs:
+            txt (str): Input parameter.
+        Outputs:
+            bool: Function output value.
+        """
         t = (txt or "").strip()
         if not t:
             return True
@@ -1867,7 +2410,16 @@ class LayoutLMv3InvoiceTokenClassifier:
 
     @staticmethod
     def _sanitize_seller_fallback_raw(txt: str) -> str:
-        """Strip stray section labels OCR may merge into the seller span."""
+        """
+        Strip stray section labels OCR may merge into the seller span.
+
+        Notes:
+            Standardized docstring for LayoutLMv3 pipeline code.
+        Inputs:
+            txt (str): Input parameter.
+        Outputs:
+            str: Function output value.
+        """
         t = (txt or "").strip()
         if not t:
             return ""
@@ -1885,9 +2437,12 @@ class LayoutLMv3InvoiceTokenClassifier:
         """
         Cut seller OCR glue before address lines or a second firm name.
 
-        Handles:
-          - ``Tran, Hurst and Rodgers Stephenson Inc …`` → ``Tran, Hurst and Rodgers``
-          - ``Mendoza and Sons Fuller, Martin and Hays`` → ``Mendoza and Sons``
+        Notes:
+            Standardized docstring for LayoutLMv3 pipeline code.
+        Inputs:
+            txt (str): Input parameter.
+        Outputs:
+            str: Function output value.
         """
         t = (txt or "").strip()
         if not t:
@@ -1925,6 +2480,13 @@ class LayoutLMv3InvoiceTokenClassifier:
     def _truncate_client_party_bleed(txt: str) -> str:
         """
         Trim client fallback strings that bleed into address/next-line tokens.
+
+        Notes:
+            Standardized docstring for LayoutLMv3 pipeline code.
+        Inputs:
+            txt (str): Input parameter.
+        Outputs:
+            str: Function output value.
         """
         t = (txt or "").strip()
         if not t:
@@ -1954,9 +2516,15 @@ class LayoutLMv3InvoiceTokenClassifier:
     @staticmethod
     def _expand_seller_tail_from_local_tokens(words: list[str], tail_candidate: str | None) -> str | None:
         """
-        Recover full seller name when fallback captured only a tail, e.g.:
-          "Andrade and Kim" <- "Hood, Andrade and Kim"
-          "Clark"           <- "Johnson, Johnson and Clark"
+        Recover full seller name when fallback captured only a tail, e.g.:.
+
+        Notes:
+            Standardized docstring for LayoutLMv3 pipeline code.
+        Inputs:
+            words (list[str]): Input parameter.
+            tail_candidate (str | None): Input parameter.
+        Outputs:
+            str | None: Function output value.
         """
         t = (tail_candidate or "").strip()
         if not t:
@@ -2008,7 +2576,14 @@ class LayoutLMv3InvoiceTokenClassifier:
     def _expand_party_tail_from_local_tokens(words: list[str], tail_candidate: str | None) -> str | None:
         """
         Generic left-expansion for tail-only party predictions.
-        Reconstructs patterns like "Last, Last and Last" and "Last, Last".
+
+        Notes:
+            Standardized docstring for LayoutLMv3 pipeline code.
+        Inputs:
+            words (list[str]): Input parameter.
+            tail_candidate (str | None): Input parameter.
+        Outputs:
+            str | None: Function output value.
         """
         t = (tail_candidate or "").strip()
         if not t or not words:
@@ -2050,6 +2625,13 @@ class LayoutLMv3InvoiceTokenClassifier:
     def _is_plausible_party_name(txt: str) -> bool:
         """
         Reject fallback names that are likely address/location fragments.
+
+        Notes:
+            Standardized docstring for LayoutLMv3 pipeline code.
+        Inputs:
+            txt (str): Input parameter.
+        Outputs:
+            bool: Function output value.
         """
         t = (txt or "").strip()
         if not t:
@@ -2102,7 +2684,14 @@ class LayoutLMv3InvoiceTokenClassifier:
     def _compact_party_name_candidate(txt: str, *, require_hyphen: bool = False) -> str | None:
         """
         Convert noisy multi-token fallback spans into a compact party name.
-        Priority: last hyphenated token (common in this dataset), then short alpha tail.
+
+        Notes:
+            Standardized docstring for LayoutLMv3 pipeline code.
+        Inputs:
+            txt (str): Input parameter.
+            require_hyphen (bool, optional): Input parameter. Defaults to False.
+        Outputs:
+            str | None: Function output value.
         """
         t = (txt or "").strip()
         if not t:
@@ -2138,6 +2727,13 @@ class LayoutLMv3InvoiceTokenClassifier:
     def _compact_seller_organization_fallback(cls, txt: str) -> str | None:
         """
         Last resort for seller fallback: keep comma + ``and`` firm strings intact.
+
+        Notes:
+            Standardized docstring for LayoutLMv3 pipeline code.
+        Inputs:
+            txt (str): Input parameter.
+        Outputs:
+            str | None: Function output value.
         """
         t = cls._truncate_seller_party_bleed(cls._sanitize_seller_fallback_raw(txt))
         if not t:
@@ -2162,13 +2758,29 @@ class LayoutLMv3InvoiceTokenClassifier:
     @staticmethod
     def _amount_candidates_from_words(words: list[str]) -> list[str]:
         """
-        Build extra monetary candidates from OCR words (uni/bi/tri-grams),
-        helping when field labels miss one of tax/net/total.
+        Build extra monetary candidates from OCR words (uni/bi/tri-grams),.
+
+        Notes:
+            Standardized docstring for LayoutLMv3 pipeline code.
+        Inputs:
+            words (list[str]): Input parameter.
+        Outputs:
+            list[str]: Function output value.
         """
         candidates: list[str] = []
         seen: set[str] = set()
 
         def _try_add(txt: str):
+            """
+            Try add function.
+
+            Notes:
+                Standardized docstring for LayoutLMv3 pipeline code.
+            Inputs:
+                txt (str): Input parameter.
+            Outputs:
+                Any: Function output value.
+            """
             nm = normalize_money(txt)
             if nm is None:
                 return
@@ -2187,6 +2799,16 @@ class LayoutLMv3InvoiceTokenClassifier:
         return candidates
 
     def _rank_name_candidates(self, candidates: list[str]) -> list[dict[str, Any]]:
+        """
+        Rank name candidates function.
+
+        Notes:
+            Standardized docstring for LayoutLMv3 pipeline code.
+        Inputs:
+            candidates (list[str]): Input parameter.
+        Outputs:
+            list[dict[str, Any]]: Function output value.
+        """
         ranked = [
             {"text": c, "score": float(self._score_name_candidate(c))}
             for c in candidates
@@ -2203,9 +2825,13 @@ class LayoutLMv3InvoiceTokenClassifier:
         """
         Resolve tax/net/total jointly using arithmetic consistency.
 
-        Layout predictions often surface multiple monetary candidates and the first one
-        is not always the correct semantic field. This picks a triplet where
-        net_worth + tax ~= total_amount when possible.
+        Notes:
+            Standardized docstring for LayoutLMv3 pipeline code.
+        Inputs:
+            entities (dict[str, list[str]]): Input parameter.
+            extra_amount_candidates (list[str] | None, optional): Input parameter. Defaults to None.
+        Outputs:
+            tuple[dict[str, str], dict[str, Any]]: Function output value.
         """
         money_fields = ("tax", "net_worth", "total_amount")
         debug: dict[str, Any] = {
@@ -2240,6 +2866,16 @@ class LayoutLMv3InvoiceTokenClassifier:
             debug["entity_candidate_pools"][f] = cleaned[:6]
 
         def choose_triplet(vmap: dict[str, list[float]]) -> tuple[float, float, float] | None:
+            """
+            Choose triplet function.
+
+            Notes:
+                Standardized docstring for LayoutLMv3 pipeline code.
+            Inputs:
+                vmap (dict[str, list[float]]): Input parameter.
+            Outputs:
+                tuple[float, float, float] | None: Function output value.
+            """
             best: tuple[float, float, float, float] | None = None
             for t in vmap["tax"] or []:
                 for n in vmap["net_worth"] or []:
@@ -2352,6 +2988,20 @@ class LayoutLMv3InvoiceTokenClassifier:
         fields: Iterable[str] = DEFAULT_FIELDS,
         return_debug: bool = False,
     ) -> tuple[dict[str, str], dict[str, Any]]:
+        """
+        Predict structured invoice fields for one image.
+
+        Notes:
+            Combines token-label entities with anchor-based and arithmetic
+            fallbacks to improve seller/client and money field robustness.
+        Inputs:
+            image_path (str | Path): Processed invoice image path.
+            fields (Iterable[str], optional): Fields to return.
+            return_debug (bool, optional): Include full resolution/debug traces.
+        Outputs:
+            tuple[dict[str, str], dict[str, Any]]:
+                Predicted fields and either debug payload or confidence metadata.
+        """
         words, word_labels, word_y_center, word_x_center, word_confidences = self._predict_word_labels(image_path=image_path)
         ents = self._entities_from_word_labels(words, word_labels)
         ent_spans = self._entity_spans_from_word_labels(words, word_labels)
@@ -2686,6 +3336,18 @@ class LayoutLMv3InvoiceTokenClassifier:
         fields: Iterable[str] = DEFAULT_FIELDS,
         debug_mode: bool = False,
     ) -> dict[str, Any]:
+        """
+        Run prediction flow and package one standardized result record.
+
+        Notes:
+            Optionally includes full prediction debug details when `debug_mode=True`.
+        Inputs:
+            image_path (str | Path): Processed invoice image path.
+            fields (Iterable[str], optional): Fields to extract.
+            debug_mode (bool, optional): Include detailed debug traces in output.
+        Outputs:
+            dict[str, Any]: Per-image inference summary and extracted fields.
+        """
         image_path = str(image_path)
         result: dict[str, Any] = {
             "image_path": image_path,
@@ -2724,8 +3386,18 @@ class LayoutLMv3InvoiceTokenClassifier:
         """
         Visualize OCR words for LayoutLM with predicted token labels.
 
-        Designed to be compatible with `visualize_sample_results`, which calls
-        `visualize_text_fn(image_path, result)`.
+        Notes:
+            Draws OCR boxes and optional label/confidence overlays for qualitative
+            inspection of token-classification behavior.
+        Inputs:
+            image_path (str | Path): Image path to visualize.
+            result (dict[str, Any] | None, optional): Optional cached result payload.
+            show_labels (bool, optional): Render predicted entity labels.
+            show_confidence (bool, optional): Render per-token confidence.
+            max_words (int | None, optional): Cap number of drawn tokens.
+            figsize (tuple[int, int], optional): Matplotlib figure size.
+        Outputs:
+            None: Displays a matplotlib visualization.
         """
         image_path = str(image_path)
         img_bgr = cv2.imread(image_path)
@@ -2802,6 +3474,23 @@ class LayoutLMv3InvoiceTokenClassifier:
         random_state: int = 42,
         debug_mode: bool = False,
     ) -> pd.DataFrame:
+        """
+        Run model inference over a dataframe of invoice images.
+
+        Notes:
+            Stores detailed per-image outputs on `self.full_results` and returns a
+            compact prediction dataframe for evaluation/analysis.
+        Inputs:
+            df (pd.DataFrame): Input rows containing image paths/keys.
+            image_col (str, optional): Column containing image paths.
+            key_col (str, optional): Column used as processed-file key.
+            fields (Iterable[str], optional): Fields to predict.
+            sample_frac (float | None, optional): Optional random subset fraction.
+            random_state (int, optional): Sampling seed.
+            debug_mode (bool, optional): Enable debug-rich single-image outputs.
+        Outputs:
+            pd.DataFrame: Prediction dataframe keyed by `processed_file`.
+        """
         run_df = df.copy()
         if sample_frac is not None:
             run_df = run_df.sample(frac=sample_frac, random_state=random_state)
@@ -2832,6 +3521,21 @@ class LayoutLMv3InvoiceTokenClassifier:
         merge_key: str = "processed_file",
         restrict_to_matched: bool = True,
     ):
+        """
+        Evaluate prediction dataframe against ground truth labels.
+
+        Notes:
+            Delegates to shared `evaluate_exact_match` for consistent metrics
+            behavior across model pipelines.
+        Inputs:
+            ground_truth_df (pd.DataFrame): Ground-truth labels dataframe.
+            pred_df (pd.DataFrame): Model prediction dataframe.
+            fields (Iterable[str], optional): Fields to score.
+            merge_key (str, optional): Join key between prediction and ground truth.
+            restrict_to_matched (bool, optional): Score only overlapping keys.
+        Outputs:
+            tuple[pd.DataFrame, dict[str, Any]]: Field-level and overall metrics.
+        """
         return evaluate_exact_match(
             ground_truth_df=ground_truth_df,
             pred_df=pred_df,
