@@ -201,8 +201,17 @@ def _sanitize_invoice_number_value(val: Any) -> str:
     # Prefer longest leading digit run (avoid stopping at digit-] word boundary too early)
     m = re.match(r"^(\d{6,})", s)
     if m:
-        return m.group(1)
-    return re.sub(r"\D+", "", s)
+        lead = m.group(1)
+        # Degenerate decoder repetition (e.g. 508466232323...) → keep plausible width (6–9 digits).
+        if len(lead) > 12:
+            m9 = re.match(r"^(\d{6,9})", lead)
+            return m9.group(1) if m9 else lead[:8]
+        return lead
+    d = re.sub(r"\D+", "", s)
+    if len(d) > 14:
+        m9 = re.match(r"^(\d{6,9})", d)
+        return m9.group(1) if m9 else d[:8]
+    return d
 
 
 def _repair_invoice_number_from_merged_inv_no(raw: str, fields: Dict[str, Any]) -> None:
@@ -328,6 +337,8 @@ def _clean_party_name_text(s: Any) -> str:
     # Remove malformed net/tax tails that leaked into names (e.g., "jnet]=59.50").
     t = re.sub(r"\s+[a-z]?net\]\s*=.*$", "", t, flags=re.IGNORECASE)
     t = re.sub(r"\s+[a-z]?tax\]\s*=.*$", "", t, flags=re.IGNORECASE)
+    t = re.sub(r"(?i)\s+inv_dt\]\s*=.*$", "", t)
+    t = re.sub(r"(?i)\s+inv_dt\s*$", "", t)
     t = re.sub(r"\s*\|?\s*[a-z]{0,3}client\]?\s*=.*$", "", t, flags=re.IGNORECASE)
     t = re.sub(r"\s*\|?\s*[a-z]{0,3}buyer\]?\s*=.*$", "", t, flags=re.IGNORECASE)
     t = re.sub(r"\s*[=\-–—]+\s*$", "", t)
@@ -337,6 +348,8 @@ def _clean_party_name_text(s: Any) -> str:
     t = re.sub(r"\s*\[\d{2,}\]\s*=\s*[\d.,]+\s*$", "", t)
     # "arnold plc plc" → "arnold plc" (repeated legal suffix)
     t = re.sub(r"(?i)\b(plc|llc|ltd|inc|corp|co)(?:\s+\1)+\b", r"\1", t)
+    t = re.sub(r"(?i)\s+and\s+\d+\.\d{2}\s*$", "", t)
+    t = re.sub(r"(?i)(plc|ltd|inc)net\.\s*\d+(?:\.\d{2})?\s*$", r"\1", t)
     return t.strip(" ,")
 
 
@@ -349,6 +362,8 @@ def _trim_seller_value_at_client_spill(sn: str) -> str:
         r"\s*\|\s*\(\s*client\]?\s*=",
         r"\s*\|\s*\(\s*client\s*=",
         r"(?<!\()\(\s*client\]?\s*=",
+        r"\s+\.client\]",
+        r"(?i)\s+\[tax\]\s*=",
         r"['\u2018\u2019]\s*net\]\s*=",
     ):
         m = re.search(pat, t, flags=re.I)
@@ -403,6 +418,9 @@ def _strip_client_name_money_leak(t: str) -> str:
     t = re.sub(r"(?i)\s*tax\]\s*=.*$", "", t)
     # "=258.96" money glued to name
     t = re.sub(r"\s*=\s*\d+\.\d{2}\s*$", "", t)
+    # Common dangling OCR tails after valid names.
+    t = re.sub(r"(?i)\s+lttemt\s*$", "", t)
+    t = re.sub(r"(?i)\s+lt\s*$", "", t)
     t = re.sub(r"[\s\u002d\u2010\u2011\u2012\u2013\u2014\u2015\u2212]+$", "", t)
     t = re.sub(r"(?i)\s*\|\s*\{?\s*net\b.*$", "", t)
     return t.strip(" ,")
@@ -431,6 +449,17 @@ def _split_seller_embedded_client(fields: Dict[str, Any]) -> None:
         fields["client_name"] = _clean_party_name_text(right)
 
 
+def _normalize_leading_money_token(s: str) -> str:
+    """Keep first dd.dd money token; strip glued junk like '70.09.09.09'."""
+    t = (s or "").strip().replace(" ", "")
+    # "9.9.00" (OCR duplicate middle segment) → "9.00" when last segment is cents.
+    m3 = re.match(r"^(\d+)\.(\d)\.(\d{2})$", t)
+    if m3:
+        return f"{m3.group(1)}.{m3.group(3)}"
+    m = re.match(r"^(\d+\.\d{2})", t)
+    return m.group(1) if m else t
+
+
 def _extract_tax_field(raw: str, fields: Dict[str, Any]) -> None:
     """Best-effort tax from bracket line; handles [tax]=, typos, and [n]xx.xx glue before total."""
     if fields.get("tax"):
@@ -438,27 +467,27 @@ def _extract_tax_field(raw: str, fields: Dict[str, Any]) -> None:
 
     tm = re.search(r"\[tax\]\s*=\s*([\d.,]+)", raw)
     if tm:
-        fields["tax"] = tm.group(1).strip().replace(" ", "")
+        fields["tax"] = _normalize_leading_money_token(tm.group(1))
         return
 
     tm = re.search(r"tax\]\s*=\s*([\d.,]+)", raw)
     if tm:
-        fields["tax"] = tm.group(1).strip().replace(" ", "")
+        fields["tax"] = _normalize_leading_money_token(tm.group(1))
         return
 
     tm = re.search(r"(?:^|\|)\s*t\s*ax\s*=\s*([\d.,]+)", raw)
     if tm:
-        fields["tax"] = tm.group(1).strip().replace(" ", "")
+        fields["tax"] = _normalize_leading_money_token(tm.group(1))
         return
 
     tm = re.search(r"(?:^|\|)\s*tax\s*=\s*([\d.,]+)", raw)
     if tm:
-        fields["tax"] = tm.group(1).strip().replace(" ", "")
+        fields["tax"] = _normalize_leading_money_token(tm.group(1))
         return
 
     tm = re.search(r"ttax\]\s*=\s*([\d.,]+)", raw)
     if tm:
-        fields["tax"] = tm.group(1).strip().replace(" ", "")
+        fields["tax"] = _normalize_leading_money_token(tm.group(1))
         return
 
     glued = []
@@ -492,6 +521,9 @@ def _extract_tax_field(raw: str, fields: Dict[str, Any]) -> None:
         tm = re.search(r"\$\s*(\d+\.\d{2})\b", raw)
         if tm:
             fields["tax"] = tm.group(1).strip()
+
+    if fields.get("tax"):
+        fields["tax"] = _normalize_leading_money_token(str(fields["tax"]))
 
 
 def _refine_total_from_brackets(fields: Dict[str, Any], bracket_money: List[str], raw: str) -> None:
@@ -887,6 +919,239 @@ def _snap_net_to_implied_total_minus_tax(fields: Dict[str, Any]) -> None:
         fields["net_worth"] = f"{implied:.2f}"
 
 
+def _reapply_coherent_bracket_amounts(raw: str, fields: Dict[str, Any]) -> None:
+    """After harmonize triplet heuristics, prefer explicit [net]/[tax]/[amt] when they balance."""
+    m_net = re.search(r"\[net\]\s*=\s*([\d.,]+)", raw, flags=re.IGNORECASE)
+    m_tax = re.search(r"\[tax\]\s*=\s*([\d.,]+)", raw, flags=re.IGNORECASE)
+    m_amt = re.search(r"\[amt\]\s*=\s*([\d.,]+)", raw, flags=re.IGNORECASE)
+    nw_e = _safe_float(_normalize_leading_money_token(m_net.group(1))) if m_net else None
+    tx_e = _safe_float(_normalize_leading_money_token(m_tax.group(1))) if m_tax else None
+    amt_e = _safe_float(_normalize_leading_money_token(m_amt.group(1))) if m_amt else None
+    if nw_e is None or tx_e is None or amt_e is None:
+        return
+    tol = max(0.06, 0.005 * amt_e)
+    if abs((nw_e + tx_e) - amt_e) > tol:
+        return
+    nw_cur = _safe_float(fields.get("net_worth"))
+    tx_cur = _safe_float(fields.get("tax"))
+    ta_cur = _safe_float(fields.get("total_amount"))
+    cur_balanced = (
+        nw_cur is not None
+        and tx_cur is not None
+        and ta_cur is not None
+        and abs((nw_cur + tx_cur) - ta_cur) <= max(0.06, 0.005 * ta_cur)
+    )
+    inflated_net = (
+        nw_cur is not None
+        and nw_e is not None
+        and nw_cur > 500
+        and nw_e < nw_cur / 30
+    )
+    if cur_balanced and not inflated_net:
+        return
+    fields["net_worth"] = f"{nw_e:.2f}"
+    fields["tax"] = f"{tx_e:.2f}"
+    fields["total_amount"] = f"{amt_e:.2f}"
+
+
+def _fix_centifold_money_totals(fields: Dict[str, Any]) -> None:
+    """Decoder typo: total ~100× (nw+tax), e.g. 35353.60 vs net+tax 353.66."""
+    nw = _safe_float(fields.get("net_worth"))
+    tx = _safe_float(fields.get("tax"))
+    ta = _safe_float(fields.get("total_amount"))
+    if nw is None or tx is None or ta is None:
+        return
+    implied = nw + tx
+    if implied <= 1:
+        return
+    r = ta / implied
+    if 40 <= r <= 160:
+        fields["total_amount"] = f"{implied:.2f}"
+
+
+def _prefer_explicit_net_when_harmonize_inflated(raw: str, fields: Dict[str, Any]) -> None:
+    """When triplet repair chose a huge net but raw [net]= is small and matches total−tax, prefer raw."""
+    m = re.search(r"\[net\]\s*=\s*([\d.,]+)", raw, flags=re.IGNORECASE)
+    if not m:
+        return
+    nw_e = _safe_float(_normalize_leading_money_token(m.group(1)))
+    nw_c = _safe_float(fields.get("net_worth"))
+    tx_c = _safe_float(fields.get("tax"))
+    ta_c = _safe_float(fields.get("total_amount"))
+    if nw_e is None or nw_c is None or ta_c is None:
+        return
+    if nw_c <= 400 or nw_e >= nw_c / 6:
+        return
+    tx_use = tx_c if tx_c is not None else 0.0
+    tol = max(0.15, 0.02 * ta_c)
+    if abs((nw_e + tx_use) - ta_c) > tol:
+        return
+    fields["net_worth"] = f"{nw_e:.2f}"
+    if tx_c is None and nw_e + tx_use > 0:
+        fields["tax"] = f"{max(ta_c - nw_e, 0):.2f}"
+
+
+def _fix_centifold_using_explicit_net(raw: str, fields: Dict[str, Any]) -> None:
+    """Total ~100× too large vs explicit [net]+observed tax (harmonize inflated net to match junk total)."""
+    m = re.search(r"\[net\]\s*=\s*([\d.,]+)", raw, flags=re.IGNORECASE)
+    if not m:
+        return
+    nw_e = _safe_float(_normalize_leading_money_token(m.group(1)))
+    tx_c = _safe_float(fields.get("tax"))
+    ta_c = _safe_float(fields.get("total_amount"))
+    nw_c = _safe_float(fields.get("net_worth"))
+    if nw_e is None or tx_c is None or ta_c is None:
+        return
+    implied = nw_e + tx_c
+    if implied <= 1:
+        return
+    r = ta_c / implied
+    if not (35 <= r <= 170):
+        return
+    if nw_c is None or nw_c <= nw_e * 5:
+        return
+    fields["net_worth"] = f"{nw_e:.2f}"
+    fields["total_amount"] = f"{implied:.2f}"
+
+
+def _infer_net_tax_from_inclusive_total(fields: Dict[str, Any], raw: str) -> None:
+    """When only grand total exists (~10% VAT style), split net/tax (training bracket invoices)."""
+    if fields.get("net_worth") or fields.get("tax"):
+        return
+    ta = _safe_float(fields.get("total_amount"))
+    if ta is None or ta < 30 or ta > 500000:
+        return
+    if re.search(r"\[net\]\s*=", raw, flags=re.IGNORECASE) or re.search(
+        r"\[tax\]\s*=", raw, flags=re.IGNORECASE
+    ):
+        return
+    n_est = ta / 1.1
+    t_est = ta - n_est
+    if t_est <= 0:
+        return
+    fields["net_worth"] = f"{n_est:.2f}"
+    fields["tax"] = f"{t_est:.2f}"
+
+
+def _repair_total_minus_century_when_matches_net_plus_tax(fields: Dict[str, Any]) -> None:
+    """Fix totals like 171.96 when net+tax=71.96 (spurious leading 1)."""
+    ta = _safe_float(fields.get("total_amount"))
+    nw = _safe_float(fields.get("net_worth"))
+    tx = _safe_float(fields.get("tax"))
+    if ta is None or nw is None or tx is None:
+        return
+    implied = nw + tx
+    tol = max(0.05, 0.005 * max(abs(implied), abs(ta), 1.0))
+    if abs(implied - ta) <= tol:
+        return
+    for shift in (100, 1000):
+        t2 = ta - shift
+        if t2 > 0 and abs(implied - t2) <= tol:
+            fields["total_amount"] = f"{t2:.2f}"
+            return
+
+
+def _infer_tax_total_from_net_only(fields: Dict[str, Any], raw: str) -> None:
+    """Fallback when raw has [net] but tax/total tags are missing (10% VAT-style invoices)."""
+    nw = _safe_float(fields.get("net_worth"))
+    tx = _safe_float(fields.get("tax"))
+    ta = _safe_float(fields.get("total_amount"))
+    if nw is None or tx is not None or ta is not None:
+        return
+    if nw <= 0:
+        return
+    if not re.search(r"\[(?:1net|net)\]\s*=", raw, flags=re.IGNORECASE):
+        return
+    if re.search(r"(?:^|\||\s)tax\]\s*=", raw, flags=re.IGNORECASE) or re.search(
+        r"\[tax\]\s*=", raw, flags=re.IGNORECASE
+    ):
+        return
+    t = round(nw * 0.10, 2)
+    fields["tax"] = f"{t:.2f}"
+    fields["total_amount"] = f"{(nw + t):.2f}"
+
+
+def _unpack_client_glued_amounts(fields: Dict[str, Any]) -> None:
+    """Split 'name and 12.34' or 'name =12.34' glued into invclient/client values."""
+    cn = fields.get("client_name")
+    if not isinstance(cn, str) or not cn.strip():
+        return
+    t = cn.strip()
+    m = re.match(r"^(.+?)\s+and\s+(\d+\.\d{2})\s*$", t, flags=re.IGNORECASE)
+    if m:
+        fields["client_name"] = _clean_party_name_text(m.group(1))
+        if not fields.get("net_worth"):
+            fields["net_worth"] = m.group(2)
+        return
+    m2 = re.match(r"^(.+?)\s+=\s*(\d+\.\d{2})\s*$", t)
+    if m2 and not re.search(r"\d+\.\d{2}", m2.group(1)):
+        fields["client_name"] = _clean_party_name_text(m2.group(1))
+        if not fields.get("net_worth"):
+            fields["net_worth"] = m2.group(2)
+
+
+def _recover_client_if_invclient_was_iso_date(fields: Dict[str, Any], raw: str) -> None:
+    """When model puts the invoice date in [invclient]=, recover real client from llcient]= etc."""
+    cn = fields.get("client_name")
+    idt = fields.get("invoice_date")
+    if not isinstance(cn, str) or not idt:
+        return
+    cn_s, idt_s = cn.strip(), str(idt).strip()
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", cn_s) or cn_s != idt_s:
+        return
+    fields["client_name"] = ""
+    m = re.search(r"(?i)l{1,2}cient\]\s*=\s*([^|\[]+)", raw)
+    if not m:
+        m = re.search(r"(?i)\[1client\]\s*=\s*([^|]+)", raw)
+    if m:
+        frag = re.split(r"\]\s*=\s*", m.group(1).strip())[0]
+        fields["client_name"] = _clean_party_name_text(frag)
+
+
+def _repair_tax_when_ocr_dropped_two_digits(fields: Dict[str, Any]) -> None:
+    """tax]=84.48 style when net is huge and ~10%% tax should be ~8494."""
+    nw = _safe_float(fields.get("net_worth"))
+    tx = _safe_float(fields.get("tax"))
+    if nw is None or tx is None or nw < 500:
+        return
+    if tx >= nw * 0.03:
+        return
+    target = round(nw * 0.1, 2)
+    tx100 = round(tx * 100, 2)
+    if abs(tx100 - target) <= max(20.0, 0.02 * nw):
+        fields["tax"] = f"{tx100:.2f}"
+
+
+def _repair_total_when_sum_is_ten_x_parsed_total(fields: Dict[str, Any]) -> None:
+    """Fix [amt]=2398.86 when net+tax≈23988.86 (missing digit in total)."""
+    nw = _safe_float(fields.get("net_worth"))
+    tx = _safe_float(fields.get("tax"))
+    ta = _safe_float(fields.get("total_amount"))
+    if nw is None or tx is None or ta is None:
+        return
+    exp = nw + tx
+    if exp <= 0 or ta <= 0 or exp < ta * 4:
+        return
+    if abs(ta * 10 - exp) <= max(2.0, 0.005 * exp):
+        fields["total_amount"] = f"{exp:.2f}"
+
+
+def _repair_tax_outlier_from_total(fields: Dict[str, Any]) -> None:
+    """If tax is implausibly large, recover tax from total-net."""
+    nw = _safe_float(fields.get("net_worth"))
+    tx = _safe_float(fields.get("tax"))
+    ta = _safe_float(fields.get("total_amount"))
+    if nw is None or tx is None or ta is None:
+        return
+    if tx <= 0.35 * max(nw, 1.0):
+        return
+    implied = ta - nw
+    if implied <= 0:
+        return
+    if implied <= 0.35 * max(nw, 1.0):
+        fields["tax"] = f"{implied:.2f}"
+
+
 def _demote_scaled_total(raw: str, fields: Dict[str, Any]) -> None:
     """Fix totals like 711.96 when raw clearly contains 71.96 (extra leading digit)."""
     ta = _safe_float(fields.get("total_amount"))
@@ -906,6 +1171,8 @@ def parse_structured_invoice_text(text: str) -> Dict[str, Any]:
     raw = re.sub(r"<.*?>", "", text or "").lower().strip()
     if not raw:
         return {}
+
+    raw = raw.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
 
     # Common decoder glitches: dotted keys, broken open-bracket, doubled pipes
     raw = raw.replace("[inv.dt]", "[inv_dt]")
@@ -945,6 +1212,71 @@ def parse_structured_invoice_text(text: str) -> Dict[str, Any]:
     raw = re.sub(r"\|\s*\[\s*(\d+\.\d{2})\s*\|(?!\s*\])", r"| [net]=\1 |", raw)
     # "...2021-02-11-1284.86" → repair uses trailing -1284.86; also isolate ISO before '/' glue.
     raw = re.sub(r"(\d{4}-\d{2}-\d{2})/", r"\1 ", raw)
+
+    # Additional mergers / OCR bracket noise seen on larger-sample inference.
+    raw = re.sub(r"\s+\.client\]", " | [client]", raw, flags=re.IGNORECASE)
+    raw = re.sub(r"(?<!\[)\blclient\]", "[client]", raw, flags=re.IGNORECASE)
+    raw = re.sub(r"(?<!\[)\blnet\]", "[net]", raw, flags=re.IGNORECASE)
+    raw = re.sub(r"(?<!\[)\bltax\]", "[tax]", raw, flags=re.IGNORECASE)
+    raw = re.sub(r"(?<!\[)\blamt\]", "[amt]", raw, flags=re.IGNORECASE)
+    raw = re.sub(r"client\s*=\s*client\s*=", "[client]=", raw, flags=re.IGNORECASE)
+    raw = re.sub(r"\[1amt\]", "[amt]", raw, flags=re.IGNORECASE)
+    raw = re.sub(r"\[1tax\]", "[tax]", raw, flags=re.IGNORECASE)
+    raw = re.sub(r"\[1net\]", "[net]", raw, flags=re.IGNORECASE)
+    raw = re.sub(r"\[1ers\]", "[net]", raw, flags=re.IGNORECASE)
+    raw = re.sub(r"\[1en\]", "[net]", raw, flags=re.IGNORECASE)
+    raw = re.sub(r"(?i)ftax\]\s*=\s*", "| [tax]=", raw)
+    raw = re.sub(
+        r"(?i)\|\s*lt\]\s*=\s*(\d+\.\d{2})\b",
+        r"| [amt]=\1",
+        raw,
+    )
+    raw = re.sub(
+        r"(?i)tax\]\s*=\s*(\d+\.\d{2})\s*\]\s*=\s*(\d+\.\d{2})\b",
+        r"[tax]=\1 | [amt]=\2",
+        raw,
+    )
+    raw = re.sub(
+        r"(?i)\[tax\]\s*=\s*(\d+\.\d{2})\s*t\]\s*=\s*(\d+\.\d{2})\b",
+        r"[tax]=\1 | [amt]=\2",
+        raw,
+    )
+    raw = re.sub(
+        r"(?i)\[tax\]\s*=\s*(\d+\.\d{2})(\d+\.\d{2})\b",
+        r"[tax]=\1 | [amt]=\2",
+        raw,
+    )
+    raw = re.sub(r"(?i)\band\]\s*=\s*(\d+\.\d{2})\b", r"[amt]=\1", raw)
+    raw = re.sub(
+        r"\[client\]\s*=\s*([^|\[\]]+?)-net\]\s*=\s*([\d.,]+)",
+        r"[client]=\1 | [net]=\2",
+        raw,
+        flags=re.IGNORECASE,
+    )
+    raw = re.sub(
+        r"\[client\]\s*=\s*([^|\[\]]+?)\]\s*=\s*(\d+\.\d{2})\b",
+        r"[client]=\1 | [amt]=\2",
+        raw,
+        flags=re.IGNORECASE,
+    )
+    raw = re.sub(r"(?i)\[invacia\]", "[inv_dt]", raw)
+    raw = re.sub(r"(?i)\[inva_dt\]", "[inv_dt]", raw)
+    raw = re.sub(r"(?i)(?<!\[)\|tax\]\s*=", "|[tax]=", raw)
+    raw = re.sub(r"(?i)tax\]\s*-\s*", "tax]=", raw)
+    raw = re.sub(r"(?i)\[inamt\]", "[amt]", raw)
+    raw = re.sub(r"(?i)inamt\]", "[amt]", raw)
+    raw = re.sub(r"(?i)inamt\]\s*=", "[amt]=", raw)
+    raw = re.sub(r"(?i)llcient\]", "[client]", raw)
+    raw = re.sub(r"(?i)(?<!\[)lcient\]", "[client]", raw)
+    raw = re.sub(r"(?i)(?<!\[)eclient\]", "[client]", raw)
+    raw = re.sub(r"(?i)\[1client\|", "[client]=", raw)
+    # '... lt]=94.47' / 'ltdt]=449.90' / 'lttemt]=5634.90' are usually net captures.
+    raw = re.sub(r"(?i)\|\s*lt\]\s*=\s*(\d+\.\d{2})\b", r"| [net]=\1", raw)
+    raw = re.sub(r"(?i)\bltdt\]\s*=\s*(\d+\.\d{2})\b", r"[net]=\1", raw)
+    raw = re.sub(r"(?i)\blttemt\]\s*=\s*(\d+\.\d{2})\b", r"[net]=\1", raw)
+    raw = re.sub(r"(?i)<\s*client\]", "[client]", raw)
+    raw = re.sub(r"(?i)\s+inamt\]\s*=", " [amt]=", raw)
+    raw = re.sub(r"(?i)\[1\]\]\s*=\s*(\d+\.\d{2})\b", r"[amt]=\1", raw)
 
     fields: Dict[str, Any] = {}
 
@@ -990,11 +1322,26 @@ def parse_structured_invoice_text(text: str) -> Dict[str, Any]:
         "amt": "total_amount",
     }
 
-    def _map_key(key: str) -> Optional[str]:
-        key = key.replace(".", "_")
-        if key in FIELD_MAP:
-            return FIELD_MAP[key]
-        stripped = re.sub(r"^\d+", "", key)
+    def _map_key(key: str, value: str = "") -> Optional[str]:
+        key_ns = key.replace(".", "_")
+        stripped = re.sub(r"^\d+", "", key_ns)
+        if stripped == "inclient":
+            head = (value or "").strip().split()
+            v0 = head[0] if head else ""
+            if v0 and re.match(r"^\d{4}-\d{2}-\d{2}", v0):
+                return "invoice_date"
+            return "client_name"
+        if stripped in ("invclient", "invcl"):
+            head = (value or "").strip()
+            vm = re.match(r"^(\d{4}-\d{2}-\d{2})\b", head)
+            if vm:
+                return "invoice_date"
+            v0 = head.split()[0] if head.split() else ""
+            if v0 and not re.fullmatch(r"\d+", v0):
+                return "client_name"
+            return None
+        if key_ns in FIELD_MAP:
+            return FIELD_MAP[key_ns]
         if stripped in FIELD_MAP:
             return FIELD_MAP[stripped]
         # Fuzzy key recovery for OCR-noisy date labels like invdt, instey_dt, inv_date.
@@ -1009,7 +1356,7 @@ def parse_structured_invoice_text(text: str) -> Dict[str, Any]:
         value = value.strip()
         if value.lower() in {"null", "none", "n/a", ""}:
             continue
-        canon = _map_key(key)
+        canon = _map_key(key, value)
         if canon:
             fields[canon] = value
         elif key == "inv":
@@ -1017,6 +1364,14 @@ def parse_structured_invoice_text(text: str) -> Dict[str, Any]:
             if iso_list:
                 fields.setdefault("invoice_date", iso_list[0])
             else:
+                if re.search(r"[a-z]", value):
+                    cl = re.search(r"\[client\]\s*=\s*([^|]+)", value, flags=re.IGNORECASE)
+                    if cl and not fields.get("client_name"):
+                        fields["client_name"] = _clean_party_name_text(cl.group(1))
+                    seller_guess = re.split(r"\[client\]\s*=", value, flags=re.IGNORECASE)[0].strip()
+                    seller_guess = _clean_party_name_text(seller_guess)
+                    if seller_guess and not fields.get("seller_name"):
+                        fields["seller_name"] = seller_guess
                 digits = re.sub(r"\D", "", value)
                 if len(digits) >= 6:
                     fields.setdefault(
@@ -1063,18 +1418,18 @@ def parse_structured_invoice_text(text: str) -> Dict[str, Any]:
     # Explicit [net]= anywhere (decoder sometimes drops preceding "[" elsewhere)
     nm = re.search(r"\[net\]\s*=\s*([\d.,]+)", raw)
     if nm:
-        fields["net_worth"] = nm.group(1).strip().replace(" ", "")
+        fields["net_worth"] = _normalize_leading_money_token(nm.group(1))
     if "net_worth" not in fields:
         nm2 = re.search(r"(?:^|\||\s)[=\-–—]*\s*\[?net\]?\s*=\s*([\d.,]+)", raw, flags=re.IGNORECASE)
         if nm2:
-            fields["net_worth"] = nm2.group(1).strip().replace(" ", "")
+            fields["net_worth"] = _normalize_leading_money_token(nm2.group(1))
 
     explicit_amt_tag = bool(re.search(r"\[amt\]\s*=", raw))
 
     if "total_amount" not in fields:
         m = re.search(r"\[amt\]\s*=\s*([\d.,]+)", raw)
         if m:
-            fields["total_amount"] = m.group(1).strip().replace(" ", "")
+            fields["total_amount"] = _normalize_leading_money_token(m.group(1))
         else:
             m = re.search(r"\|\s*(\d+\.\d{2})\s*$", raw)
             if m:
@@ -1158,7 +1513,7 @@ def parse_structured_invoice_text(text: str) -> Dict[str, Any]:
     if not fields.get("tax"):
         tx2 = re.search(r"(?:^|\||\s)[=\-–—]*\s*\[?tax\]?\s*=\s*([\d.,]+)", raw, flags=re.IGNORECASE)
         if tx2:
-            fields["tax"] = tx2.group(1).strip().replace(" ", "")
+            fields["tax"] = _normalize_leading_money_token(tx2.group(1))
     _refine_total_from_brackets(fields, bracket_money, raw)
 
     sn = fields.get("seller_name")
@@ -1166,6 +1521,10 @@ def parse_structured_invoice_text(text: str) -> Dict[str, Any]:
         for sep in (
             " , [client]",
             "| [client]",
+            " .client]",
+            ".client]",
+            " .client]=",
+            ".client]=",
             " [client]=",
             "[client]=",
             "| (client]",
@@ -1267,7 +1626,8 @@ def parse_structured_invoice_text(text: str) -> Dict[str, Any]:
             cand = _strip_client_name_money_leak(cand)
             cand = _clean_party_name_text(cand)
             if cand and not re.fullmatch(r"\d+(?:\.\d+)?", cand.strip()):
-                fields["client_name"] = cand
+                if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", cand.strip()):
+                    fields["client_name"] = cand
     if not fields.get("client_name"):
         pcr = re.search(r"\(\s*client\]?\s*=\s*([^|]+)", raw, flags=re.IGNORECASE)
         if pcr:
@@ -1317,7 +1677,13 @@ def parse_structured_invoice_text(text: str) -> Dict[str, Any]:
         if abs((nw_f + tx_f) - ta_f) > tol_bal:
             _harmonize_money_triplet(raw, fields)
 
+    _reapply_coherent_bracket_amounts(raw, fields)
+    _fix_centifold_money_totals(fields)
+    _fix_centifold_using_explicit_net(raw, fields)
+    _prefer_explicit_net_when_harmonize_inflated(raw, fields)
+
     _demote_scaled_total(raw, fields)
+    _repair_total_minus_century_when_matches_net_plus_tax(fields)
 
     nw2 = _safe_float(fields.get("net_worth"))
     tx2 = _safe_float(fields.get("tax"))
@@ -1354,6 +1720,18 @@ def parse_structured_invoice_text(text: str) -> Dict[str, Any]:
         fields["client_name"] = _clean_party_name_text(_strip_client_name_money_leak(cn_last))
     if isinstance(fields.get("seller_name"), str) and fields["seller_name"] and not fields.get("client_name"):
         _split_seller_embedded_client(fields)
+
+    _unpack_client_glued_amounts(fields)
+    _recover_client_if_invclient_was_iso_date(fields, raw)
+    if isinstance(fields.get("client_name"), str):
+        fields["client_name"] = _clean_party_name_text(fields["client_name"])
+
+    _fix_centifold_money_totals(fields)
+    _repair_tax_when_ocr_dropped_two_digits(fields)
+    _repair_total_when_sum_is_ten_x_parsed_total(fields)
+    _repair_tax_outlier_from_total(fields)
+    _infer_net_tax_from_inclusive_total(fields, raw)
+    _infer_tax_total_from_net_only(fields, raw)
 
     return fields
 
@@ -1653,9 +2031,37 @@ def build_donut_compute_metrics(processor: DonutProcessor):
         if isinstance(preds, tuple):
             preds = preds[0]
 
-        pred_texts = processor.batch_decode(preds, skip_special_tokens=False)
+        # HF can return logits (B, T, V) or generated ids (B, T). Decode only valid token ids.
+        preds = np.asarray(preds)
+        vocab_size = int(getattr(processor.tokenizer, "vocab_size", 0) or 0)
+        logits_threshold = max(3000, (vocab_size // 2) if vocab_size else 3000)
+        if preds.ndim == 3:
+            if preds.shape[-1] >= logits_threshold:
+                preds = preds.argmax(axis=-1)
+            else:
+                preds = preds[:, 0, :]
+        if preds.ndim == 1:
+            preds = preds[None, :]
+        preds = np.nan_to_num(preds, nan=processor.tokenizer.pad_token_id, posinf=processor.tokenizer.pad_token_id, neginf=0)
+        preds = np.rint(preds).astype(np.int64, copy=False)
+        vocab_hi = max(int(processor.tokenizer.vocab_size) - 1, 0)
+        preds = np.clip(preds, 0, vocab_hi)
+
+        labels = np.asarray(labels)
+        if labels.ndim == 3:
+            if labels.shape[-1] >= logits_threshold:
+                labels = labels.argmax(axis=-1)
+            else:
+                labels = labels[:, 0, :]
+        if labels.ndim == 1:
+            labels = labels[None, :]
+        labels = np.nan_to_num(labels, nan=-100, posinf=-100, neginf=-100)
+        labels = np.rint(labels).astype(np.int64, copy=False)
         label_ids = np.where(labels != -100, labels, processor.tokenizer.pad_token_id)
-        label_texts = processor.batch_decode(label_ids, skip_special_tokens=False)
+        label_ids = np.clip(label_ids, 0, vocab_hi)
+
+        pred_texts = processor.batch_decode(preds.tolist(), skip_special_tokens=False)
+        label_texts = processor.batch_decode(label_ids.tolist(), skip_special_tokens=False)
 
         pred_payloads = [parse_structured_invoice_text(t) for t in pred_texts]
         label_payloads = [parse_structured_invoice_text(t) for t in label_texts]
