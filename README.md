@@ -17,6 +17,47 @@ Ways to Download the Dataset (instructions on the link above): kagglehub, Kaggle
 1. `InvoiceZonalOCRPipeline` (`scripts/basic_model.py`) - zonal OCR baseline
 2. `PytesseractInvoiceTextDetector` (`scripts/pt_model.py`) - full-page OCR + heuristics
 3. `LayoutLMv3InvoiceTokenClassifier` (`scripts/layoutlmv3_model.py`) - weakly-supervised token classifier + fallback resolvers
+4. Donut (`scripts/donut_model.py`, `Donut_model.ipynb`) - vision encoder–decoder fine-tuned for structured invoice text
+
+## Evaluation Metrics
+
+The tables below summarize **per-field** performance after merging model predictions with ground truth. **Accuracy** is correct predictions divided by the number of evaluated rows for that run. **Recall**, **precision**, and **F1** use the usual definitions. Sample counts differ by pipeline and notebook configuration; re-run the relevant notebook or script after training or data changes to refresh these numbers.
+
+### Basic model (`InvoiceZonalOCRPipeline`)
+
+| field | accuracy | recall | precision | f1 |
+| --- | ---: | ---: | ---: | ---: |
+| invoice_number | 1.000000 | 1.000000 | 1.000000 | 1.000000 |
+| invoice_date | 1.000000 | 1.000000 | 1.000000 | 1.000000 |
+| seller_name | 0.996390 | 0.996390 | 0.996390 | 0.996390 |
+| client_name | 0.996390 | 0.996390 | 0.996390 | 0.996390 |
+| net_worth | 0.126354 | 0.126354 | 0.246479 | 0.167064 |
+| tax | 0.144404 | 0.144404 | 0.325203 | 0.200000 |
+| total_amount | 0.093863 | 0.093863 | 0.168831 | 0.120650 |
+
+### Pytesseract model (`PytesseractInvoiceTextDetector`)
+
+| field | accuracy | recall | precision | f1 |
+| --- | ---: | ---: | ---: | ---: |
+| invoice_number | 0.992933 | 0.992933 | 0.992933 | 0.992933 |
+| invoice_date | 1.000000 | 1.000000 | 1.000000 | 1.000000 |
+| seller_name | 0.989399 | 0.989399 | 0.992908 | 0.991150 |
+| client_name | 1.000000 | 1.000000 | 1.000000 | 1.000000 |
+| net_worth | 0.968198 | 0.968198 | 0.975089 | 0.971631 |
+| total_amount | 0.975265 | 0.975265 | 0.975265 | 0.975265 |
+| tax | 0.992933 | 0.992933 | 0.992933 | 0.992933 |
+
+### Donut (fine-tuned)
+
+| field | accuracy | recall | precision | f1 |
+| --- | ---: | ---: | ---: | ---: |
+| invoice_number | 0.750 | 0.750 | 0.750000 | 0.750000 |
+| invoice_date | 0.975 | 0.975 | 1.000000 | 0.987342 |
+| seller_name | 0.700 | 0.700 | 0.756757 | 0.727273 |
+| client_name | 0.525 | 0.525 | 0.567568 | 0.545455 |
+| net_worth | 0.825 | 0.825 | 0.891892 | 0.857143 |
+| tax | 0.775 | 0.775 | 0.861111 | 0.815789 |
+| total_amount | 0.775 | 0.775 | 0.837838 | 0.805195 |
 
 ## Getting Started
 
