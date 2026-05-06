@@ -18,6 +18,7 @@ Ways to Download the Dataset (instructions on the link above): kagglehub, Kaggle
 2. `PytesseractInvoiceTextDetector` (`scripts/pt_model.py`) - full-page OCR + heuristics
 3. `LayoutLMv3InvoiceTokenClassifier` (`scripts/layoutlmv3_model.py`) - weakly-supervised token classifier + fallback resolvers
 4. Donut (`scripts/donut_model.py`, `Donut_model.ipynb`) - vision encoder–decoder fine-tuned for structured invoice text
+5. SmolVLM (`scripts/smolvlm_model.py`, `SmolVLM_model.ipynb`) - compact vision-language model for invoice field extraction
 
 ## Evaluation Metrics
 
@@ -47,7 +48,31 @@ The tables below summarize **per-field** performance after merging model predict
 | total_amount | 0.975265 | 0.975265 | 0.975265 | 0.975265 |
 | tax | 0.992933 | 0.992933 | 0.992933 | 0.992933 |
 
-### Donut (fine-tuned)
+### LayoutLMv3 (`LayoutLMv3InvoiceTokenClassifier`)
+
+| field | accuracy | recall | precision | f1 |
+| --- | ---: | ---: | ---: | ---: |
+| invoice_number | 0.992933 | 0.992933 | 0.992933 | 0.992933 |
+| invoice_date | 1.000000 | 1.000000 | 1.000000 | 1.000000 |
+| seller_name | 0.844523 | 0.844523 | 0.898496 | 0.870674 |
+| client_name | 0.918728 | 0.918728 | 0.945455 | 0.931900 |
+| net_worth | 0.971731 | 0.971731 | 0.975177 | 0.973451 |
+| tax | 0.982332 | 0.982332 | 0.985816 | 0.984071 |
+| total_amount | 0.978799 | 0.978799 | 0.978799 | 0.978799 |
+
+### SmolVLM
+
+| field | accuracy | recall | precision | f1 |
+| --- | ---: | ---: | ---: | ---: |
+| invoice_number | 0.915493 | 0.915493 | 0.935252 | 0.925267 |
+| invoice_date | 0.943662 | 0.943662 | 0.964029 | 0.953737 |
+| seller_name | 0.971831 | 0.971831 | 0.992806 | 0.982206 |
+| client_name | 0.922535 | 0.922535 | 0.942446 | 0.932384 |
+| net_worth | 0.823944 | 0.823944 | 0.841727 | 0.832740 |
+| tax | 0.859155 | 0.859155 | 0.945736 | 0.900369 |
+| total_amount | 0.845070 | 0.845070 | 0.863309 | 0.854093 |
+
+### Donut 
 
 | field | accuracy | recall | precision | f1 |
 | --- | ---: | ---: | ---: | ---: |
