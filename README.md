@@ -20,9 +20,16 @@ Ways to Download the Dataset (instructions on the link above): kagglehub, Kaggle
 4. Donut (`scripts/donut_model.py`, `Donut_model.ipynb`) - vision encoder–decoder fine-tuned for structured invoice text
 5. SmolVLM (`scripts/smolvlm_model.py`, `SmolVLM_model.ipynb`) - compact vision-language model for invoice field extraction
 
+### Notebook Map (Full Pipelines)
+
+- `basic_models.ipynb`: contains both `InvoiceZonalOCRPipeline` and `PytesseractInvoiceTextDetector` end-to-end workflows.
+- `layoutlmv3_model.ipynb`: full weak-supervision training + inference/evaluation pipeline for `LayoutLMv3InvoiceTokenClassifier`.
+- `SmolVLM_model.ipynb`: full training + inference/evaluation pipeline for `SmolVLMInvoiceModel`.
+- `Donut_model.ipynb`: full fine-tuning + inference/evaluation pipeline for `DonutInvoiceTextDetector`.
+
 ## Evaluation Metrics
 
-The tables below summarize **per-field** performance after merging model predictions with ground truth. **Accuracy** is correct predictions divided by the number of evaluated rows for that run. **Recall**, **precision**, and **F1** use the usual definitions. Sample counts differ by pipeline and notebook configuration; re-run the relevant notebook or script after training or data changes to refresh these numbers.
+The tables below summarize best **per-field** performance after merging model predictions with ground truth. **Accuracy** is correct predictions divided by the number of evaluated rows for that run. **Recall**, **precision**, and **F1** use the usual definitions. Sample counts differ by pipeline and notebook configuration; re-run the relevant notebook or script after training or data changes to refresh these numbers.
 
 ### Basic model (`InvoiceZonalOCRPipeline`)
 
@@ -60,7 +67,7 @@ The tables below summarize **per-field** performance after merging model predict
 | tax | 0.982332 | 0.982332 | 0.985816 | 0.984071 |
 | total_amount | 0.978799 | 0.978799 | 0.978799 | 0.978799 |
 
-### SmolVLM
+### SmolVLM (`SmolVLMInvoiceModel`)
 
 | field | accuracy | recall | precision | f1 |
 | --- | ---: | ---: | ---: | ---: |
@@ -72,7 +79,7 @@ The tables below summarize **per-field** performance after merging model predict
 | tax | 0.859155 | 0.859155 | 0.945736 | 0.900369 |
 | total_amount | 0.845070 | 0.845070 | 0.863309 | 0.854093 |
 
-### Donut 
+### Donut (`DonutInvoiceTextDetector`)
 
 | field | accuracy | recall | precision | f1 |
 | --- | ---: | ---: | ---: | ---: |
@@ -307,8 +314,180 @@ visualize_sample_results(
 )
 ```
 
+### 7. SmolVLM Pipeline (`SmolVLMInvoiceModel`)
+
+This pipeline builds multimodal training samples, fine-tunes SmolVLM, and evaluates on a held-out test split.
+
+```python
+from pathlib import Path
+import pandas as pd
+from sklearn.model_selection import train_test_split
+
+from scripts.smolvlm_model import SmolVLMInvoiceModel, DEFAULT_FIELDS
+
+# Paths (edit for your machine/data layout)
+PROJECT_ROOT = Path("/path/to/data_dir").resolve()
+OUTPUT_DIR = PROJECT_ROOT / "output_images" / "smolvlm"
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+GT_CSV_PATH = PROJECT_ROOT / "cleaned_invoices.csv"
+PROCESSED_IMAGES_CSV_PATH = PROJECT_ROOT / "combined_results.csv"
+
+# Load prepared data artifacts
+ground_truth_df = pd.read_csv(GT_CSV_PATH)
+processed_images_df = pd.read_csv(PROCESSED_IMAGES_CSV_PATH)
+
+# Initialize SmolVLM wrapper
+smol = SmolVLMInvoiceModel(
+    model_name="HuggingFaceTB/SmolVLM-256M-Instruct",
+    output_dir=OUTPUT_DIR,
+)
+
+samples = smol.build_samples(
+    ground_truth_df=ground_truth_df,
+    processed_images_df=processed_images_df,
+    fields=DEFAULT_FIELDS,
+)
+
+# Train/validation/test split
+train_samples, temp_samples = train_test_split(samples, test_size=0.2, random_state=42)
+val_samples, test_samples = train_test_split(temp_samples, test_size=0.5, random_state=42)
+
+test_keys = {s.processed_file for s in test_samples}
+test_processed_images_df = processed_images_df[
+    processed_images_df["processed_file"].astype(str).isin(test_keys)
+].copy()
+
+if "processed_file" in ground_truth_df.columns:
+    test_ground_truth_df = ground_truth_df[
+        ground_truth_df["processed_file"].astype(str).isin(test_keys)
+    ].copy()
+else:
+    test_ground_truth_df = ground_truth_df.copy()
+
+# Fine-tune SmolVLM (set FAST_MODE=False for a fuller run)
+FAST_MODE = True
+train_subset = train_samples
+val_subset = val_samples
+
+if FAST_MODE:
+    train_subset, _ = train_test_split(
+        train_samples,
+        train_size=min(0.2, max(32 / len(train_samples), 0.05)),
+        random_state=42,
+    )
+    val_subset, _ = train_test_split(
+        val_samples,
+        train_size=min(0.5, max(16 / len(val_samples), 0.1)),
+        random_state=42,
+    )
+
+history = smol.train(
+    train_samples=train_subset,
+    val_samples=val_subset,
+    epochs=1,
+    batch_size=1 if FAST_MODE else 2,
+    learning_rate=2e-5,
+    max_label_length=128 if FAST_MODE else 256,
+)
+print(history)
+
+model_dir = smol.save()
+print("Saved model to", model_dir)
+
+# Test-set inference + evaluation
+pred_df = smol.predict_dataset(processed_images_df=test_processed_images_df)
+metrics_df, overall = smol.evaluate_against_ground_truth(
+    ground_truth_df=test_ground_truth_df,
+    pred_df=pred_df,
+    fields=DEFAULT_FIELDS,
+)
+print(metrics_df)
+print("Test overall metrics:", overall)
+```
+
+### 8. Donut Pipeline (`DonutInvoiceTextDetector`)
+
+This pipeline fine-tunes Donut on invoice images, reloads the trained checkpoint, and evaluates on a held-out test split.
+Unlike the OCR/LayoutLM pipelines, Donut inference here reads from `original_path` image paths.
+
+```python
+import pandas as pd
+from sklearn.model_selection import train_test_split
+
+from scripts.donut_model import DonutInvoiceTextDetector
+from scripts.donut_training_utils import train_donut_invoice_model
+from scripts.visualize_util import create_analysis_dashboard, visualize_sample_results
+
+ground_truth_df = pd.read_csv("/path/to/data_dir/...cleaned_invoices.csv")
+combined_results = pd.read_csv("/path/to/data_dir/...combined_results.csv")
+
+# Join labels with source image paths
+full_df = ground_truth_df.merge(
+    combined_results[["original_file", "original_path"]],
+    left_on="File Name",
+    right_on="original_file",
+    how="inner",
+)
+
+# Optional subset for faster experiments
+sample_df = full_df.iloc[:200, :]
+
+# Train / val / test split
+train_df, holdout_df = train_test_split(sample_df, test_size=0.2, random_state=42)
+train_df, val_df = train_test_split(train_df, test_size=0.2, random_state=42)
+test_df = holdout_df
+
+# Fine-tune Donut
+train_output = train_donut_invoice_model(
+    train_df=train_df,
+    val_df=val_df,
+    test_df=test_df,
+    output_dir="/path/to/data_dir/...donut_finetuned_model",
+    image_col="original_path",
+    augment_factor=1,
+)
+print("Validation metrics:", train_output["validation_metrics"])
+print("Test metrics:", train_output["test_metrics"])
+
+# Reload trained checkpoint
+donut_detector = DonutInvoiceTextDetector(
+    output_dir="/path/to/data_dir/...donut_output",
+)
+donut_detector.reload_model("/path/to/data_dir/...donut_finetuned_model")
+
+# Test-set inference
+summary_df = donut_detector.run_inference(
+    test_df,
+    image_path_col="original_path",
+    sample_frac=1,
+    batch_size=4,
+)
+print(summary_df.head())
+
+# Evaluation
+donut_metrics_df, donut_overall = donut_detector.evaluate_against_ground_truth(test_df)
+print(donut_metrics_df)
+print("Overall Metrics:", donut_overall)
+
+# Dashboard + sample outputs
+_ = create_analysis_dashboard(
+    donut_detector.full_results,
+    metrics_df=donut_metrics_df,
+    fields=["invoice_number", "invoice_date", "seller_name", "client_name", "tax", "net_worth", "total_amount"],
+)
+visualize_sample_results(
+    donut_detector.full_results,
+    visualize_text_fn=None,  # Donut does not return OCR boxes
+    n_samples=3,
+)
+```
+
 ## Notes
 
-- `InvoiceZonalOCRPipeline` is template-zone dependent. Tune ROIs using `visualize_zones(...)`.
-- For fair model comparison, keep the same train/test split and field list across `pt_model` and `layoutlmv3_model`.
-- Numeric fields now support locale formats like `1 234,56` in the baseline parser/evaluator.
+- `InvoiceZonalOCRPipeline` (baseline) is template-zone dependent: expect strong performance on fields with stable layout, but weaker transfer to unseen invoice designs unless ROI boxes are retuned with `visualize_zones(...)`.
+- `PytesseractInvoiceTextDetector` is OCR-first and more layout-agnostic than zonal OCR, but still sensitive to image quality/preprocessing; low-quality scans can reduce numeric and name accuracy.
+- `LayoutLMv3InvoiceTokenClassifier` uses weak supervision plus fallback heuristics: best results require good weak-label coverage and consistent OCR tokens; run the diagnostics/debug cells in `layoutlmv3_model.ipynb` before changing heuristics.
+- `SmolVLMInvoiceModel` and `DonutInvoiceTextDetector` are heavier trainable VLMs/DocVLMs: first runs are slower and more resource-intensive than OCR pipelines, so start with smaller subsets/epochs, then scale up.
+- Donut pipeline uses `original_path` images (not `processed_path`), while OCR/LayoutLM pipelines typically use processed-image artifacts; mixing these paths is a common first-run mistake.
+- For fair comparisons across models, keep the same field list, train/test split seed, and evaluation table generation workflow in the notebooks.
